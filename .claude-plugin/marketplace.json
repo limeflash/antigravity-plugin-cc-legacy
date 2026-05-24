@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Antigravity CLI integration for Claude Code \u2014 delegate tasks to Google's `agy` from inside your editor.",
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "plugins": [
     {
       "name": "agy",
       "description": "Use the Google Antigravity CLI (`agy`) from Claude Code \u2014 slash commands /agy:setup, /agy:ask, /agy:delegate, /agy:review, /agy:research, /agy:image.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "simplybychris",
         "url": "https://detechtive.pl"
