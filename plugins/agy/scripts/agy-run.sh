@@ -116,6 +116,59 @@ cmd_review() {
   "$path" -p "$full"
 }
 
+cmd_image() {
+  local description=""
+  local name=""
+  local output=""
+  # Parse --name and --output anywhere in the args; anything else accumulates
+  # into the description (so users can pass either flag-first or text-first).
+  local positional=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)    name="${2:-}";   shift 2 ;;
+      --output)  output="${2:-}"; shift 2 ;;
+      --)        shift; positional+=("$@"); break ;;
+      *)         positional+=("$1"); shift ;;
+    esac
+  done
+  description="${positional[*]}"
+  if [ -z "$description" ]; then
+    echo "error: image requires a description" >&2
+    exit 64
+  fi
+  local agy_path
+  agy_path="$(require_ready)"
+  local prompt
+  if [ -n "$name" ]; then
+    prompt="Please generate an image: ${description}. Save the image with name \"${name}\"."
+  else
+    prompt="Please generate an image: ${description}."
+  fi
+  # Capture response — agy will print the path of the generated PNG.
+  local response
+  if ! response="$("$agy_path" -p "$prompt" 2>&1)"; then
+    printf '%s\n' "$response"
+    return 1
+  fi
+  printf '%s\n' "$response"
+  # Optional copy: scan the response for an artifact path and copy it to
+  # --output. We accept any absolute path ending in .png/.jpg/.jpeg/.webp.
+  if [ -n "$output" ]; then
+    local src
+    src="$(printf '%s' "$response" \
+      | grep -oE '/[^[:space:]]+\.(png|jpg|jpeg|webp)' \
+      | head -n1)"
+    if [ -n "$src" ] && [ -f "$src" ]; then
+      cp "$src" "$output"
+      echo
+      echo "[wrapper] copied $src -> $output"
+    else
+      echo
+      echo "[wrapper] warning: could not locate a generated image path in agy's response" >&2
+    fi
+  fi
+}
+
 usage() {
   cat >&2 <<'USAGE'
 agy-run.sh — wrapper for the Google Antigravity CLI inside the Claude Code plugin.
@@ -124,6 +177,8 @@ Subcommands:
   check                       Print install/auth status as JSON.
   ask "<prompt>" [-- flags]   Run `agy -p "<prompt>"` non-interactively.
   review [focus text]         Pipe current `git diff` into `agy` for review.
+  image "<description>"       Ask agy to generate an image (Imagen under the hood).
+          [--name <slug>] [--output <path>]
 USAGE
 }
 
@@ -131,6 +186,7 @@ case "${1:-}" in
   check)              cmd_check ;;
   ask)     shift;     cmd_ask "$@" ;;
   review)  shift;     cmd_review "$@" ;;
+  image)   shift;     cmd_image "$@" ;;
   -h|--help|"")       usage; exit 64 ;;
   *)                  echo "error: unknown subcommand '$1'" >&2; usage; exit 64 ;;
 esac
