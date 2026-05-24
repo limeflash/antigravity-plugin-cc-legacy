@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>agy Antigravity CLI plugin for Claude Code</title>
+<meta name="description" content="Open-source plugin that lets Claude Code delegate tasks to Google's Antigravity CLI." />
+<meta property="og:title" content="agy Antigravity CLI plugin for Claude Code" />
+<meta property="og:description" content="Open-source plugin that lets Claude Code delegate tasks to Google's Antigravity CLI." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://simplybychris.github.io/antigravity-plugin-cc/" />
+<meta name="theme-color" content="#ffffff" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: rgb(18, 19, 23);
+    --ink-soft: rgb(75, 78, 89);
+    --ink-mute: rgb(120, 125, 138);
+    --line: rgba(33, 34, 38, 0.08);
+    --line-strong: rgba(33, 34, 38, 0.14);
+    --bg: #ffffff;
+    --surface: rgba(183, 191, 217, 0.10);
+    --surface-strong: rgba(183, 191, 217, 0.18);
+    --code-bg: #f6f7f9;
+    /* Antigravity-derived accent palette (blue → purple → orange) */
+    --g1: #4285F4;
+    --g2: #A348C7;
+    --g3: #FF6F3C;
+    --grad: linear-gradient(135deg, var(--g1) 0%, var(--g2) 50%, var(--g3) 100%);
+    --radius-pill: 9999px;
+    --radius-card: 24px;
+    --radius-logo: 8px;
+    --transition: 0.15s ease-out;
+    --font-sans: "Inter", "Google Sans Flex", "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* Particle-style backdrop, matching Antigravity's subtle dot field */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: radial-gradient(circle, rgba(33, 34, 38, 0.06) 1px, transparent 1.4px);
+    background-size: 28px 28px;
+    background-position: 0 0;
+    mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, black 30%, transparent 75%);
+  }
+  /* Soft chromatic glow behind the hero — picks up the Antigravity palette */
+  body::after {
+    content: "";
+    position: absolute;
+    top: -120px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(1100px, 92vw);
+    height: 540px;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(circle at 22% 38%, rgba(66, 133, 244, 0.18), transparent 45%),
+      radial-gradient(circle at 58% 28%, rgba(163, 72, 199, 0.14), transparent 50%),
+      radial-gradient(circle at 82% 52%, rgba(255, 111, 60, 0.16), transparent 50%);
+    filter: blur(40px);
+    opacity: 0.85;
+  }
+  main, header, footer, section { position: relative; z-index: 1; }
+
+  /* Gradient-highlighted word in headlines — subtle, same weight */
+  .grad {
+    background: var(--grad);
+    -webkit-background-clip: text;
+            background-clip: text;
+    -webkit-text-fill-color: transparent;
+            color: transparent;
+  }
+
+  /* ===== Header ===== */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 32px;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 10px;
+    text-decoration: none;
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .brand-name { font-weight: 600; }
+  .brand-sub { color: var(--ink-mute); font-weight: 400; font-size: 14.5px; }
+  .header-actions { display: flex; gap: 10px; align-items: center; }
+
+  /* ===== Buttons (pill, mirroring Antigravity) ===== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 22px;
+    border-radius: var(--radius-pill);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: var(--transition);
+    line-height: 1;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .btn-primary {
+    background: var(--ink);
+    color: #fff;
+  }
+  .btn-primary:hover { background: #2a2c33; }
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--ink);
+    border-color: rgba(33, 34, 38, 0.06);
+  }
+  .btn-secondary:hover { background: var(--surface-strong); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink-soft);
+    padding: 8px 14px;
+  }
+  .btn-ghost:hover { color: var(--ink); background: var(--surface); }
+  .btn svg { width: 16px; height: 16px; flex: none; }
+
+  /* ===== Hero ===== */
+  .hero {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+    text-align: center;
+  }
+  .eyebrow {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    border: 1px solid rgba(33, 34, 38, 0.06);
+    color: var(--ink-soft);
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 32px;
+    letter-spacing: 0;
+  }
+  h1 {
+    font-family: var(--font-sans);
+    font-weight: 450;
+    font-size: clamp(44px, 6.6vw, 80px);
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0 0 28px;
+    color: var(--ink);
+  }
+  .lede {
+    max-width: 640px;
+    margin: 0 auto 40px;
+    font-size: clamp(17px, 1.6vw, 19px);
+    color: var(--ink-soft);
+    line-height: 1.55;
+  }
+  .hero-cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+
+  /* ===== Sections ===== */
+  section { padding: 88px 32px; }
+  .container { max-width: 1080px; margin: 0 auto; }
+  .section-eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-mute);
+    margin: 0 0 14px;
+  }
+  .section-title {
+    font-size: clamp(32px, 4vw, 44px);
+    font-weight: 450;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0 0 16px;
+    color: var(--ink);
+  }
+  .section-lede {
+    font-size: 17px;
+    color: var(--ink-soft);
+    max-width: 620px;
+    margin: 0 0 48px;
+  }
+
+  /* ===== Install steps ===== */
+  .steps {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    counter-reset: stepnum;
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 22px;
+    align-items: start;
+    padding: 26px 28px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+  }
+  .step-num {
+    counter-increment: stepnum;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid rgba(33, 34, 38, 0.06);
+  }
+  .step-num::before { content: counter(stepnum); }
+  .step-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .step-desc {
+    margin: 0 0 16px;
+    color: var(--ink-soft);
+    font-size: 15px;
+  }
+
+  /* ===== Code cards (light, not dark) ===== */
+  .code {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--ink);
+    overflow: hidden;
+    position: relative;
+  }
+  .code pre {
+    margin: 0;
+    padding: 16px 56px 16px 18px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+    border-radius: var(--radius-pill);
+    padding: 4px 12px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    backdrop-filter: blur(6px);
+  }
+  .copy-btn:hover { color: var(--ink); border-color: var(--line-strong); background: #fff; }
+  .copy-btn.copied { color: var(--ink); border-color: var(--line-strong); }
+  code.inline {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(33, 34, 38, 0.04);
+  }
+
+  /* ===== Feature tiles ===== */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .tile {
+    padding: 28px;
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, border-color 0.2s ease-out;
+    position: relative;
+    isolation: isolate;
+  }
+  /* Soft chromatic border that appears on hover (mask trick = gradient ring) */
+  .tile::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-card);
+    padding: 1px;
+    background: var(--grad);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.25s ease-out;
+    pointer-events: none;
+  }
+  .tile:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 30px rgba(66, 133, 244, 0.08), 0 4px 12px rgba(163, 72, 199, 0.05);
+    border-color: transparent;
+  }
+  .tile:hover::before { opacity: 1; }
+  .tile:hover .tile-cmd { color: var(--g2); }
+  .tile-cmd { transition: color 0.2s ease-out; }
+  .tile-cmd {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid rgba(33, 34, 38, 0.04);
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    margin-bottom: 16px;
+  }
+  .tile-title {
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .tile-desc {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  /* ===== Why delegate ===== */
+  .why-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    align-items: start;
+  }
+  .why-points { margin: 0; padding: 0; list-style: none; display: grid; gap: 24px; }
+  .why-points li { padding-left: 0; }
+  .why-points strong {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+    color: var(--ink);
+    font-size: 16px;
+  }
+  .why-points span {
+    color: var(--ink-soft);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .flow-card {
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+    padding: 28px;
+  }
+  .flow-card h3 {
+    margin: 0 0 18px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-mute);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .flow {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--ink);
+    white-space: pre-wrap;
+  }
+  .flow span.label { color: var(--ink-mute); }
+
+  /* ===== Footer ===== */
+  footer {
+    padding: 56px 32px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-mute);
+    font-size: 14px;
+  }
+  .footer-inner {
+    max-width: 1080px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .footer-links { display: flex; gap: 24px; }
+  footer a { color: var(--ink-soft); text-decoration: none; transition: var(--transition); }
+  footer a:hover { color: var(--ink); }
+
+  /* ===== Responsive ===== */
+  @media (max-width: 760px) {
+    header { padding: 16px 20px; }
+    .header-actions .btn-ghost { display: none; }
+    .brand-sub { display: none; }
+    .hero { padding: 40px 20px 72px; }
+    section { padding: 64px 20px; }
+    .why-grid { grid-template-columns: 1fr; gap: 32px; }
+    .step { grid-template-columns: 1fr; gap: 14px; padding: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="brand" href="https://github.com/simplybychris/antigravity-plugin-cc">
+    <span class="brand-name">agy</span>
+    <span class="brand-sub">plugin for Claude Code</span>
+  </a>
+  <div class="header-actions">
+    <a class="btn btn-ghost" href="#install">Install</a>
+    <a class="btn btn-ghost" href="#features">Features</a>
+    <a class="btn btn-secondary" href="https://github.com/simplybychris/antigravity-plugin-cc" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.69.08-.69 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.67 1.25 3.32.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.17 1.18.92-.26 1.91-.39 2.89-.4.98.01 1.97.14 2.89.4 2.2-1.49 3.17-1.18 3.17-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.41-5.27 5.69.41.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56 4.56-1.53 7.85-5.83 7.85-10.91C23.5 5.65 18.35.5 12 .5z"/></svg>
+      GitHub
+    </a>
+    <a class="btn btn-primary" href="#install">Install</a>
+  </div>
+</header>
+
+<main class="hero">
+  <span class="eyebrow">v0.3.1 · open source · MIT</span>
+  <h1>Delegate tasks to Google <span class="grad">Antigravity</span> from inside Claude Code.</h1>
+  <p class="lede">
+    A small open-source plugin that wraps the <code class="inline">agy</code> CLI.
+    Six slash commands, a forwarding subagent, code review, deep research,
+    and native image generation without leaving your editor.
+  </p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="#install">Install in Claude Code</a>
+    <a class="btn btn-secondary" href="https://github.com/simplybychris/antigravity-plugin-cc" target="_blank" rel="noopener">View on GitHub</a>
+  </div>
+</main>
+
+<section id="install">
+  <div class="container">
+    <p class="section-eyebrow">Install</p>
+    <h2 class="section-title">Three commands. <span class="grad">One minute.</span></h2>
+    <p class="section-lede">
+      Run these inside Claude Code, in order. Each card has a one-click copy button.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num" aria-hidden="true"></div>
+        <div>
+          <h3 class="step-title">Register the marketplace</h3>
+          <p class="step-desc">Tells Claude Code where to find the plugin.</p>
+          <div class="code">
+            <button class="copy-btn" data-copy="/plugin marketplace add simplybychris/antigravity-plugin-cc">Copy</button>
+<pre>/plugin marketplace add simplybychris/antigravity-plugin-cc</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num" aria-hidden="true"></div>
+        <div>
+          <h3 class="step-title">Install the plugin</h3>
+          <p class="step-desc">Pulls v0.3.1 into the user-scope plugin cache.</p>
+          <div class="code">
+            <button class="copy-btn" data-copy="/plugin install agy@antigravity-cc">Copy</button>
+<pre>/plugin install agy@antigravity-cc</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num" aria-hidden="true"></div>
+        <div>
+          <h3 class="step-title">Reload and verify</h3>
+          <p class="step-desc">Activates the slash commands and runs the install/auth check.</p>
+          <div class="code">
+            <button class="copy-btn" data-copy="/reload-plugins
+/agy:setup">Copy</button>
+<pre>/reload-plugins
+/agy:setup</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <p class="section-eyebrow">Features</p>
+    <h2 class="section-title">Six commands. <span class="grad">One subagent.</span></h2>
+    <p class="section-lede">
+      Each tile is one entry point. Talk to Claude naturally or call the slash command directly.
+    </p>
+
+    <div class="tiles">
+      <div class="tile">
+        <span class="tile-cmd">/agy:setup</span>
+        <h3 class="tile-title">Install and auth check</h3>
+        <p class="tile-desc">Verify <code class="inline">agy</code> is on the box and signed in. Offers to install it on first run.</p>
+      </div>
+      <div class="tile">
+        <span class="tile-cmd">/agy:ask</span>
+        <h3 class="tile-title">One-shot prompt</h3>
+        <p class="tile-desc">Send a single prompt to <code class="inline">agy</code> and stream the answer back into Claude Code, verbatim.</p>
+      </div>
+      <div class="tile">
+        <span class="tile-cmd">/agy:delegate</span>
+        <h3 class="tile-title">Hand off a task</h3>
+        <p class="tile-desc">Route a discrete coding, refactor, or debugging task to the <code class="inline">agy:runner</code> subagent. Supports <code class="inline">--background</code> and <code class="inline">--model</code>.</p>
+      </div>
+      <div class="tile">
+        <span class="tile-cmd">/agy:research</span>
+        <h3 class="tile-title">Deep research</h3>
+        <p class="tile-desc">Wraps your topic in a structured research brief (background, findings, caveats, sources) and lets <code class="inline">agy</code> investigate.</p>
+      </div>
+      <div class="tile">
+        <span class="tile-cmd">/agy:image</span>
+        <h3 class="tile-title">Generate images</h3>
+        <p class="tile-desc">Native image generation via <code class="inline">agy</code>'s built-in Imagen tool. Optional <code class="inline">--name</code> and <code class="inline">--output</code> to drop the file next to your project.</p>
+      </div>
+      <div class="tile">
+        <span class="tile-cmd">/agy:review</span>
+        <h3 class="tile-title">Second-opinion review</h3>
+        <p class="tile-desc">Pipe the current <code class="inline">git diff</code> into <code class="inline">agy</code> for a steerable review with optional focus text.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <div class="container">
+    <div class="why-grid">
+      <div>
+        <p class="section-eyebrow">Why this matters</p>
+        <h2 class="section-title">Two agents. One terminal. <span class="grad">Pick the right tool</span> per task.</h2>
+        <ul class="why-points">
+          <li>
+            <strong>Stay in Claude Code.</strong>
+            <span>Use Claude as the primary driver. Hand off targeted tasks to <code class="inline">agy</code> when Gemini is the better fit, without switching context.</span>
+          </li>
+          <li>
+            <strong>Long jobs in the background.</strong>
+            <span>Subagents in Claude Code run in the background and notify you when they finish. A natural fit for <code class="inline">--background</code> research, refactors, or CI investigations.</span>
+          </li>
+          <li>
+            <strong>No runtime baggage.</strong>
+            <span>Pure Bash wrapper around the local <code class="inline">agy</code> binary. No Node, no broker, no hidden services.</span>
+          </li>
+          <li>
+            <strong>Open source, MIT-licensed.</strong>
+            <span>Audit the wrapper, fork it, modify it. Issues and pull requests welcome.</span>
+          </li>
+        </ul>
+      </div>
+      <div class="flow-card" aria-hidden="true">
+        <h3>How a request flows</h3>
+<div class="flow">Claude Code
+  <span class="label">→</span> /agy:delegate
+    <span class="label">→</span> agy:runner subagent
+      <span class="label">→</span> agy-run.sh
+        <span class="label">→</span> agy -p "your task"
+          <span class="label">→</span> Gemini · Claude · OSS
+
+<span class="label"># Or just ask Claude:</span>
+"Ask agy to refactor this module."
+  <span class="label">→</span> agy:runner picks it up
+     automatically.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-inner">
+    <div>MIT · built on top of <a href="https://antigravity.google/" target="_blank" rel="noopener">Google Antigravity</a></div>
+    <div class="footer-links">
+      <a href="https://github.com/simplybychris/antigravity-plugin-cc" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/simplybychris/antigravity-plugin-cc/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+      <a href="https://github.com/simplybychris/antigravity-plugin-cc/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://detechtive.pl" target="_blank" rel="noopener">detechtive.pl</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const orig = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1400);
+      } catch (e) { btn.textContent = 'Press Cmd+C'; }
+    });
+  });
+</script>
+
+</body>
+</html>
