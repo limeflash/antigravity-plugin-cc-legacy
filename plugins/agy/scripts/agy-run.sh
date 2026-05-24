@@ -138,35 +138,56 @@ cmd_image() {
   fi
   local agy_path
   agy_path="$(require_ready)"
-  local prompt
+
+  # Build a prompt that (a) tells agy to use its built-in generate_image tool
+  # and (b) demands a strict marker line so the wrapper can extract the saved
+  # path deterministically — regardless of how chatty the model otherwise is.
+  local name_clause=""
   if [ -n "$name" ]; then
-    prompt="Please generate an image: ${description}. Save the image with name \"${name}\"."
-  else
-    prompt="Please generate an image: ${description}."
+    name_clause=" Save the image with name \"${name}\"."
   fi
-  # Capture response — agy will print the path of the generated PNG.
-  local response
-  if ! response="$("$agy_path" -p "$prompt" 2>&1)"; then
-    printf '%s\n' "$response"
-    return 1
-  fi
+  local prompt
+  prompt="Use your built-in generate_image tool to create the following image. Description: ${description}.${name_clause}
+
+After the tool returns, you MUST end your reply with a single line in this exact format (no quotes, no markdown, nothing after it):
+IMAGE_PATH: <absolute filesystem path to the saved image>
+
+The IMAGE_PATH line is required — the calling wrapper parses it to locate the file."
+
+  # Capture response — printed verbatim so the user sees agy's natural reply,
+  # then the wrapper appends its own resolution line.
+  local response rc
+  response="$("$agy_path" -p "$prompt" 2>&1)" || rc=$?
+  rc="${rc:-0}"
   printf '%s\n' "$response"
-  # Optional copy: scan the response for an artifact path and copy it to
-  # --output. We accept any absolute path ending in .png/.jpg/.jpeg/.webp.
-  if [ -n "$output" ]; then
-    local src
+
+  # 1) Prefer the deterministic marker we asked for.
+  local src
+  src="$(printf '%s' "$response" \
+    | sed -n 's/^[[:space:]]*IMAGE_PATH:[[:space:]]*//p' \
+    | tail -n1)"
+
+  # 2) Fallback: scrape any absolute /path/.../*.{png,jpg,jpeg,webp} from the
+  #    response (agy sometimes mentions the path inline without the marker).
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
     src="$(printf '%s' "$response" \
       | grep -oE '/[^[:space:]]+\.(png|jpg|jpeg|webp)' \
       | head -n1)"
-    if [ -n "$src" ] && [ -f "$src" ]; then
-      cp "$src" "$output"
-      echo
-      echo "[wrapper] copied $src -> $output"
-    else
-      echo
-      echo "[wrapper] warning: could not locate a generated image path in agy's response" >&2
-    fi
   fi
+
+  if [ -n "$src" ] && [ -f "$src" ]; then
+    echo
+    echo "[wrapper] generated: $src"
+    if [ -n "$output" ]; then
+      cp "$src" "$output"
+      echo "[wrapper] copied to: $output"
+    fi
+  else
+    echo
+    echo "[wrapper] warning: agy did not include an IMAGE_PATH line and no image path was found in its reply." >&2
+    echo "[wrapper]          if --output was requested, the copy was skipped." >&2
+  fi
+  return "$rc"
 }
 
 usage() {
