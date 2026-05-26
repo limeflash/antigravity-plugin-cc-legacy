@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-26
+
+### Added
+- `/agy:help` — single discoverable index of every `/agy:*` command,
+  supported `--model` aliases, and the canonical model names. The wrapper
+  is the single source of truth; the slash command just prints its
+  `help` subcommand verbatim.
+- `--model <alias>` on `/agy:ask`, `/agy:delegate`, and `/agy:research`.
+  Per-call model selection: the wrapper takes a lock on
+  `~/.gemini/antigravity-cli/settings.json`, atomically swaps in the
+  requested model, invokes `agy`, then restores the original on exit
+  (including SIGINT / SIGTERM / SIGHUP).
+- Alias table: `flash-low`, `flash-medium` (`flash-med`), `flash`
+  (`flash-high`), `pro-low`, `pro` (`pro-high`), `sonnet` (`claude-sonnet`),
+  `opus` (`claude-opus`), `gpt-oss` (`gpt-oss-120b`). Canonical TUI strings
+  (e.g. `"Claude Opus 4.6 (Thinking)"`) are accepted verbatim.
+- `agy-run.sh` gains `cmd_help`, `resolve_model_alias`,
+  `validate_settings_file`, `with_settings_lock`, `with_model_override`,
+  and `restore_orphaned_backup` (cleans up after a `SIGKILL`ed previous
+  run on the next invocation).
+
+### Fixed
+- Removed stale references to `agy -m <model>` from `runner.md`,
+  `commands/delegate.md`, `commands/research.md`, and
+  `skills/antigravity-cli/SKILL.md`. `agy` v1.0.2 has no `-m` / `--model`
+  CLI flag — model selection is now correctly handled by the wrapper.
+  Users who tried `--model` in 0.3.x and earlier got failures; 0.4.0
+  makes the documented behavior work.
+- Removed references to `~/.config/antigravity/config.toml` from the
+  root README and `commands/delegate.md`. `agy` does not read that path;
+  its actual settings live in `~/.gemini/antigravity-cli/settings.json`.
+- Dropped the `--output-format json` mention from `SKILL.md` — that flag
+  does not exist either.
+
+### Internal
+- `_patch_model_field` writes via `python3 -c "json.dump(...)"` when
+  available, falling back to a narrow `sed` regex that targets only
+  single-line `"model"` entries. Atomic `mv` from a tmpfile is used in
+  both paths.
+- `mkdir`-based portable lockfile (no `flock(1)` dependency — macOS has
+  none by default). Dead-holder detection via `kill -0` prevents
+  deadlocks after `SIGKILL`.
+- Wrapper now has a sourcing guard so individual functions can be unit
+  tested without triggering the dispatch.
+
 ## [0.3.1] - 2026-05-24
 
 ### Fixed

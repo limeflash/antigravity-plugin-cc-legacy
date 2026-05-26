@@ -23,24 +23,34 @@ Do not grab trivial questions the parent thread can answer in one breath.
 
 ## How to forward
 
-Use exactly one `Bash` call:
+Use exactly one `Bash` call. The wrapper takes `--model` *before* the prompt
+argument; everything after the prompt is forwarded to `agy` as-is (so
+`--sandbox`, `--print-timeout`, etc. still work).
 
 ```
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask "<prompt>" [agy-flags...]
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask [--model <alias>] "<prompt>" [agy-native-flags...]
 ```
 
-- Preserve the user's task text verbatim. Only strip flags that belong to the
-  parent slash command (e.g. `--background`, `--model <name>`).
-- If the parent passed `--model <name>`, append `-m <name>` to the wrapper
-  call after the prompt argument — for example:
+- Preserve the user's task text verbatim. Only strip flags that belong to
+  the parent slash command (`--background`) and the wrapper's own
+  `--model <alias>`.
+- If the parent passed `--model <alias>`, put it **before** the prompt
+  argument:
   ```
-  bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask "fix the off-by-one" -m claude-sonnet
+  bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask --model opus "fix the off-by-one"
   ```
-  The wrapper passes any extra arguments straight through to `agy`, so `-m`
-  becomes `agy`'s own model flag.
-- If no `--model` was given, leave model selection to `agy` itself.
-- If the wrapper reports that `agy` is missing or unauthenticated, return that
-  error verbatim and stop. Do not try to install or log in for the user.
+  The wrapper resolves the alias, takes a lock on `~/.gemini/antigravity-cli/settings.json`,
+  patches the model field, invokes `agy`, then restores the original on
+  exit. Supported aliases: `flash-low`, `flash-medium`, `flash`, `pro-low`,
+  `pro`, `sonnet`, `opus`, `gpt-oss`. Canonical TUI strings (e.g.
+  `"Claude Opus 4.6 (Thinking)"`) are also accepted.
+- If no `--model` was given, leave model selection to whatever the user's
+  TUI is currently set to.
+- Do not pass any other model-selection flag to `agy` directly — `agy`
+  doesn't have one. Use the wrapper's `--model` or omit it entirely.
+- If the wrapper reports that `agy` is missing or unauthenticated, return
+  that error verbatim and stop. Do not try to install or log in for the
+  user.
 
 ## Response style
 

@@ -6,7 +6,7 @@ full usage, see the [repo-level README](../../README.md).
 ## Layout
 
 - `commands/` — slash commands: `/agy:setup`, `/agy:ask`, `/agy:delegate`,
-  `/agy:review`.
+  `/agy:research`, `/agy:review`, `/agy:image`, `/agy:help`.
 - `agents/runner.md` — the `agy:runner` subagent (thin forwarder around the
   Antigravity CLI).
 - `skills/antigravity-cli/` — internal runtime skill, used only inside the

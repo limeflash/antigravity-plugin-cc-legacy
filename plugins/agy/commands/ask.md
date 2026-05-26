@@ -1,6 +1,6 @@
 ---
 description: Run a one-shot prompt through the Antigravity CLI and return its output verbatim
-argument-hint: "<prompt>"
+argument-hint: "[--model <alias>] <prompt>"
 allowed-tools: Bash(bash:*)
 ---
 
@@ -14,20 +14,33 @@ argument; do **not** interpolate or splice it into the command):
 $ARGUMENTS
 ```
 
-Use the `Bash` tool to run:
+## How to invoke
+
+If the user's text begins with `--model <alias>` (e.g. `--model opus rest of
+prompt…`), lift the flag and its value out of the prompt and place them
+**before** the prompt argument to the wrapper. Anything else stays as the
+prompt body.
+
+Use the `Bash` tool to run one of:
 
 ```
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask "<user-request-here>"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask "<prompt>"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/agy-run.sh" ask --model <alias> "<prompt>"
 ```
 
-…substituting `<user-request-here>` with the exact text above, quoted as one
-shell argument so characters like `"`, `$`, `;`, `\` and backticks cannot
-break out.
+…substituting `<prompt>` with the exact text above, quoted as one shell
+argument so characters like `"`, `$`, `;`, `\` and backticks cannot break
+out.
+
+Aliases for `<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`,
+`pro`, `sonnet`, `opus`, `gpt-oss`. The canonical TUI strings (e.g.
+`"Claude Opus 4.6 (Thinking)"`) are also accepted. Run `/agy:help` for the
+full table.
 
 Notes:
 
 - If the wrapper reports `agy is not installed` or `not authenticated`, stop
-  and tell the user to run `/antigravity:setup`.
+  and tell the user to run `/agy:setup`.
 - If the user's request is empty, ask what they want to ask Antigravity.
-- For multi-step or long-running work, suggest `/antigravity:delegate`, which
-  routes through the `agy` subagent and supports `--background`.
+- For multi-step or long-running work, suggest `/agy:delegate`, which routes
+  through the `agy:runner` subagent and supports `--background`.

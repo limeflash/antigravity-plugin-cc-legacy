@@ -13,17 +13,20 @@ just Bash and `agy`.
 
 - **`/agy:setup`** — verify `agy` is installed and authenticated; can install
   it for you if it is missing.
-- **`/agy:ask <prompt>`** — one-shot prompt through `agy -p`; returns the raw
-  response.
-- **`/agy:delegate <task>`** — hand a task to the `agy:runner` subagent.
-  Supports `--background` for long jobs and `--model <name>` for routing.
-- **`/agy:research <topic>`** — delegate a deep-research investigation; wraps
-  the topic in a structured prompt and routes through `agy:runner`.
+- **`/agy:ask [--model <alias>] <prompt>`** — one-shot prompt through `agy -p`;
+  returns the raw response.
+- **`/agy:delegate [--background] [--model <alias>] <task>`** — hand a task
+  to the `agy:runner` subagent. `--background` for long jobs.
+- **`/agy:research [--background] [--model <alias>] <topic>`** — delegate a
+  deep-research investigation; wraps the topic in a structured prompt and
+  routes through `agy:runner`.
 - **`/agy:image <description>`** — generate an image with `agy`'s built-in
   `generate_image` tool (Imagen under the hood). Optional `--name` and
   `--output`.
 - **`/agy:review [focus]`** — ask Antigravity to review your current
   `git diff`.
+- **`/agy:help`** — show all commands, supported `--model` aliases, and
+  canonical model names.
 - **`agy:runner` subagent** — thin forwarding wrapper around the Antigravity
   CLI; available as `subagent_type: "agy:runner"` for programmatic
   delegation.
@@ -108,18 +111,26 @@ Stage or make some changes, then:
 ### Pick a specific model
 
 ```text
-/agy:delegate --model claude-sonnet fix the off-by-one in pagination
-/agy:delegate --model gemini-3.1-pro write a high-coverage test for the cache layer
+/agy:delegate --model sonnet fix the off-by-one in pagination
+/agy:delegate --model pro write a high-coverage test for the cache layer
+/agy:ask --model opus "explain Go's escape analysis"
 ```
 
-If no model is given, `agy` uses whatever is configured in
-`~/.config/antigravity/config.toml` (or its global default).
+Supported aliases: `flash-low`, `flash-medium`, `flash`, `pro-low`, `pro`,
+`sonnet`, `opus`, `gpt-oss`. The canonical TUI strings (e.g.
+`"Claude Opus 4.6 (Thinking)"`) are also accepted. Run `/agy:help` for the
+full table.
+
+If no `--model` is given, the wrapper uses whatever the TUI is currently set
+to — stored in `~/.gemini/antigravity-cli/settings.json`. Project-local
+`AGENTS.md` and `GEMINI.md` files are read directly by `agy` and unaffected
+by this plugin.
 
 ### Delegate a deep research investigation
 
 ```text
 /agy:research what's the current state of WebGPU support across browsers in 2026?
-/agy:research --background --model claude-opus survey post-quantum signature schemes used in TLS
+/agy:research --background --model opus survey post-quantum signature schemes used in TLS
 ```
 
 The command wraps your topic in a research-oriented preamble (background,
@@ -157,10 +168,16 @@ Claude Code  →  /agy:*  →  agy:runner subagent  →  agy-run.sh  →  agy -p
 
 ## Configuration
 
-Antigravity itself reads `~/.config/antigravity/config.toml` and project-local
-`AGENTS.md` / `GEMINI.md` files. This plugin doesn't override or shadow any
-of that — drop config files where `agy` expects them and they'll be picked
-up.
+`agy` stores its preferences (selected model, theme, telemetry, trusted
+workspaces) in `~/.gemini/antigravity-cli/settings.json`. Project-local
+`AGENTS.md` / `GEMINI.md` files are read directly by `agy`. This plugin
+doesn't override or shadow any of that — drop config files where `agy`
+expects them and they'll be picked up.
+
+The `--model <alias>` flag on `/agy:ask`, `/agy:delegate`, and `/agy:research`
+swaps in your requested model for the duration of a single call (under a
+lockfile, with automatic restore on exit) and leaves the TUI's selected
+model intact for subsequent runs.
 
 ## FAQ
 

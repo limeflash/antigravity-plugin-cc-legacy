@@ -1,6 +1,6 @@
 ---
 description: Delegate a task to the Antigravity (`agy`) runner subagent; supports background execution and model selection
-argument-hint: "[--background] [--model <name>] <task description>"
+argument-hint: "[--background] [--model <alias>] <task description>"
 allowed-tools: Agent
 ---
 
@@ -15,11 +15,16 @@ $ARGUMENTS
 - If the request contains `--background`, launch the subagent with
   `run_in_background: true`. Strip the flag from the forwarded task text.
 - Otherwise run the subagent in the foreground.
-- If the request contains `--model <name>`, forward it to the subagent so it
-  can be appended as `-m <name>` to the `agy` call. Strip it from the task
-  text.
-- If no model is given, let `agy` pick its own default (configured in
-  `~/.config/antigravity/config.toml` or the global default).
+- If the request contains `--model <alias>`, forward it to the subagent so
+  it can be appended to the wrapper call as `--model <alias>` (placed
+  **before** the prompt argument). Strip it from the task text.
+- If no model is given, the wrapper uses whatever the TUI is currently set
+  to (stored in `~/.gemini/antigravity-cli/settings.json`).
+
+Aliases for `<alias>`: `flash-low`, `flash-medium`, `flash`, `pro-low`,
+`pro`, `sonnet`, `opus`, `gpt-oss`. Canonical TUI strings (e.g.
+`"Claude Opus 4.6 (Thinking)"`) are also accepted. Run `/agy:help` for the
+full table.
 
 ## Response style
 
