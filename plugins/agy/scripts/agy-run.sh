@@ -1,36 +1,16 @@
 #!/usr/bin/env bash
-# agy-run.sh — wrapper dla CLI Google Antigravity (`agy`) używany przez
-# plugin Claude Code. Zachowuje cienką warstwę między slash commandami,
-# subagentem `agy:runner` a samym `agy`.
-#
-# Subkomendy:
-#   check                              Status instalacji + auth jako JSON.
-#   ask [--model A] "<prompt>" [-- ..] Non-interaktywne `agy -p "<prompt>"`;
-#                                      `--model` ustawia model dla tego wywołania.
-#   review [focus text]                Wysyła aktualny `git diff` do `agy`.
-#   image "<description>" [...]        Generuje obraz przez wbudowane narzędzie agy.
-#   help                               Drukuje user-facing indeks /agy:*.
-#
-# Wybór modelu: plugin udostępnia flagę `--model` dla per-call wyboru modelu.
-# Pod spodem zarządza polem "model" w ~/.gemini/antigravity-cli/settings.json
-# (atomic write pod lockiem, restore po wywołaniu). Stale backupy po
-# nieczystym wyjściu odzyskiwane są przy następnym uruchomieniu wrappera.
-#
-# Auth: `agy` używa OAuth przez system keyring lub zmiennej
-# ANTIGRAVITY_API_KEY. Wrapper nigdy nie czyta ani nie loguje klucza —
-# sprawdza tylko jego obecność.
+# agy-run.sh — Claude Code wrapper around Google Antigravity CLI (`agy`).
+# Subcommands: check | ask | review | image | help.
+# `--model` (on ask) overrides the model for one call via locked
+# settings.json patching, restored on exit.
 
 set -euo pipefail
 
-# Plik ustawień czytany przez CLI/TUI agy przy każdym starcie. Wrapper
-# modyfikuje tutaj pole "model" gdy caller poda --model.
 AGY_SETTINGS_FILE="${HOME}/.gemini/antigravity-cli/settings.json"
 AGY_SETTINGS_LOCKDIR="${HOME}/.gemini/antigravity-cli/.agy-plugin.lock"
 AGY_SETTINGS_BACKUP="${HOME}/.gemini/antigravity-cli/settings.json.agy-plugin.bak"
 AGY_SETTINGS_SENTINEL="${HOME}/.gemini/antigravity-cli/.agy-plugin.patched"
 
-# Lokalizacja binarki `agy`. Najpierw PATH, potem typowe ścieżki instalacyjne
-# oficjalnego instalatora (`curl … install.sh | bash`).
 find_agy() {
   if command -v agy >/dev/null 2>&1; then
     command -v agy
@@ -48,7 +28,6 @@ find_agy() {
   return 1
 }
 
-# auth_status drukuje jedno z: api-key | oauth | missing
 auth_status() {
   if [ -n "${ANTIGRAVITY_API_KEY:-}" ]; then
     echo "api-key"
@@ -59,16 +38,13 @@ auth_status() {
   fi
 }
 
-# Minimalny JSON string escape — pure bash, działa zarówno na BSD sed
-# (macOS) jak i GNU sed. Obsługuje znaki które realnie pojawiają się w
-# ścieżkach i numerach wersji.
 j_esc() {
   local s="$1"
-  s="${s//\\/\\\\}"     # backslash  -> \
-  s="${s//\"/\\\"}"        # "          -> \"
-  s="${s//$'\n'/\\n}"       # newline    -> \n
-  s="${s//$'\r'/\\r}"       # CR         -> \r
-  s="${s//$'\t'/\\t}"       # tab        -> \t
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
   printf '%s' "$s"
 }
 
@@ -86,8 +62,6 @@ JSON
     "$(j_esc "$path")" "$(j_esc "$version")" "$(j_esc "$auth")"
 }
 
-# Fail fast jeśli `agy` brakuje lub jest niezauthentykowany. Sukces =
-# wypisanie ścieżki do binarki.
 require_ready() {
   if ! path="$(find_agy)"; then
     echo "error: agy is not installed." >&2
@@ -102,12 +76,7 @@ require_ready() {
   echo "$path"
 }
 
-# -----------------------------------------------------------------------------
-# Wybór modelu — aliasy + bezpieczna modyfikacja settings.json
-# -----------------------------------------------------------------------------
-
-# Drukuje tabelę aliasów na zadany deskryptor (domyślnie stderr). Używane
-# zarówno przez błędną ścieżkę resolve_model_alias jak i przez cmd_help.
+# fd arg lets cmd_help reuse the same table on stdout.
 print_model_table() {
   local fd="${1:-2}"
   {
@@ -130,17 +99,25 @@ print_model_table() {
   } >&"$fd"
 }
 
-# resolve_model_alias <input> -> canonical na stdout lub exit 64 z tabelą
-# aliasów na stderr.
+_current_default_model() {
+  [ -f "$AGY_SETTINGS_FILE" ] || return 1
+  grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$AGY_SETTINGS_FILE" 2>/dev/null \
+    | sed -E 's/.*"model"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
+    | head -n1
+}
+
 resolve_model_alias() {
   local input="${1:-}"
   if [ -z "$input" ]; then
-    echo "error: --model requires a non-empty value" >&2
+    echo "error: --model requires a non-empty value (e.g. --model pro)" >&2
     print_model_table 2
+    local current; current="$(_current_default_model 2>/dev/null || true)"
+    if [ -n "$current" ]; then
+      echo >&2
+      echo "Tip: omit --model to use your current default (\"$current\")." >&2
+    fi
     exit 64
   fi
-  # Najpierw exact-match canonical (case-sensitive) — pozwala wkleić string
-  # z TUI verbatim, razem z paren-suffixem.
   case "$input" in
     "Gemini 3.5 Flash (Low)"|\
     "Gemini 3.5 Flash (Medium)"|\
@@ -153,8 +130,7 @@ resolve_model_alias() {
       printf '%s' "$input"
       return 0 ;;
   esac
-  # W przeciwnym razie traktuj jako alias: lowercase przez tr (bash 3.2
-  # compat — macOS ma /bin/bash 3.2, więc bez ${var,,}).
+  # bash 3.2 (macOS /bin/bash) lacks ${var,,}, hence tr.
   local lc; lc="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')"
   case "$lc" in
     flash-low)                  printf '%s' "Gemini 3.5 Flash (Low)" ;;
@@ -172,9 +148,6 @@ resolve_model_alias() {
   esac
 }
 
-# Bail z jasnym błędem gdy settings.json nie istnieje, jest pusty, ma
-# zepsuty JSON albo brakuje w nim pola "model". Nigdy nie wymyślamy
-# świeżego pliku — user powinien najpierw odpalić `agy` interaktywnie.
 validate_settings_file() {
   if [ ! -f "$AGY_SETTINGS_FILE" ]; then
     echo "error: $AGY_SETTINGS_FILE not found." >&2
@@ -198,13 +171,8 @@ validate_settings_file() {
   fi
 }
 
-# restore_orphaned_backup — wołane raz przy starcie wrappera. Jeśli
-# poprzedni run zginął na SIGKILL, zostawia backup + sentinel. Odzyskaj
-# przywracając backup gdy PID z sentinel'a jest martwy.
 restore_orphaned_backup() {
   [ -f "$AGY_SETTINGS_SENTINEL" ] || {
-    # Brak sentinel'a ale backup jakimś cudem został: ostrzeż i usuń. Nie
-    # potrafimy określić poprawnego stanu, więc nie auto-restore.
     if [ -f "$AGY_SETTINGS_BACKUP" ]; then
       echo "[wrapper] note: stale backup with no sentinel; removing $AGY_SETTINGS_BACKUP" >&2
       rm -f "$AGY_SETTINGS_BACKUP"
@@ -213,7 +181,6 @@ restore_orphaned_backup() {
   }
   local pid; pid="$(head -n1 "$AGY_SETTINGS_SENTINEL" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    # Holder dalej żyje — lock nas zserializuje. Nie ruszamy.
     return 0
   fi
   if [ -f "$AGY_SETTINGS_BACKUP" ]; then
@@ -223,19 +190,17 @@ restore_orphaned_backup() {
   rm -f "$AGY_SETTINGS_SENTINEL"
 }
 
-# with_settings_lock <fn> [args...] — przenośny lock oparty na mkdir. macOS
-# nie ma flock(1), więc mkdir (atomic na każdym POSIX FS o który dbamy).
-# Detekcja martwego holdera chroni przed deadlockiem po SIGKILL.
+# mkdir-based lock; macOS has no flock(1). Dead-holder detection avoids
+# SIGKILL deadlocks.
 with_settings_lock() {
   local fn="$1"; shift
   local attempt=0
-  local max_wait="${AGY_LOCK_WAIT_SECONDS:-600}"   # default 10min
+  local max_wait="${AGY_LOCK_WAIT_SECONDS:-600}"
   while ! mkdir "$AGY_SETTINGS_LOCKDIR" 2>/dev/null; do
     local holder_pid_file="${AGY_SETTINGS_LOCKDIR}/pid"
     if [ -f "$holder_pid_file" ]; then
       local holder_pid; holder_pid="$(cat "$holder_pid_file" 2>/dev/null || true)"
       if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
-        # Martwy holder — łamiemy lock i retry.
         rm -rf "$AGY_SETTINGS_LOCKDIR"
         continue
       fi
@@ -254,9 +219,8 @@ with_settings_lock() {
   return "$rc"
 }
 
-# Atomowy JSON write. Preferuje python3 (zawsze obecny na nowoczesnym
-# macOS/Linux); fallback do wąskiego sed targetującego tylko single-line
-# "model": "..." — taki format produkuje samo `agy`.
+# python3 preferred for correctness; sed fallback only matches single-line
+# "model": "..." (the format agy itself writes).
 _patch_model_field() {
   local canonical="$1"
   local tmp; tmp="$(mktemp "${AGY_SETTINGS_FILE}.tmp.XXXXXX")"
@@ -277,7 +241,7 @@ PY
         "$AGY_SETTINGS_FILE" > "$tmp"
     echo "[wrapper] note: python3 missing, used sed fallback to patch settings.json" >&2
   fi
-  mv "$tmp" "$AGY_SETTINGS_FILE"   # atomic na POSIX
+  mv "$tmp" "$AGY_SETTINGS_FILE"
 }
 
 _restore_settings() {
@@ -287,8 +251,6 @@ _restore_settings() {
   rm -f "$AGY_SETTINGS_SENTINEL"
 }
 
-# Body właściwego patched-runu — wywoływane pod lockiem przez
-# with_model_override.
 _do_patched_run() {
   local canonical="$1"; shift
   cp -p "$AGY_SETTINGS_FILE" "$AGY_SETTINGS_BACKUP"
@@ -302,9 +264,7 @@ _do_patched_run() {
   return "$rc"
 }
 
-# with_model_override <canonical> -- <agy_cmd...> — patchuje settings.json,
-# wywołuje agy, restoruje. Separator `--` chroni przed dwuznacznością
-# gdyby canonical name kiedykolwiek zaczynał się od `-`.
+# `--` separator guards against canonical names that start with `-`.
 with_model_override() {
   local canonical="$1"; shift
   if [ "${1:-}" != "--" ]; then
@@ -316,22 +276,33 @@ with_model_override() {
   with_settings_lock _do_patched_run "$canonical" "$@"
 }
 
-# -----------------------------------------------------------------------------
-# Subkomendy
-# -----------------------------------------------------------------------------
-
 cmd_ask() {
   local model_alias=""
-  # Parsuje tylko leading --model/--model=value. Wszystko inne (włącznie z
-  # promptem) przerywa pętlę i zostaje w $@.
+  local model_flag_seen=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --model)   model_alias="${2:-}"; shift 2 ;;
-      --model=*) model_alias="${1#--model=}"; shift ;;
+      --model)
+        model_flag_seen=1
+        # `shift 2` on a one-arg list would `set -e`-exit silently; handle
+        # the empty case so resolve_model_alias prints the real error.
+        if [ $# -ge 2 ]; then
+          model_alias="$2"; shift 2
+        else
+          shift
+        fi ;;
+      --model=*)
+        model_flag_seen=1
+        model_alias="${1#--model=}"
+        shift ;;
       --)        shift; break ;;
       *)         break ;;
     esac
   done
+  # Resolve model before prompt check so empty --model gets the right error.
+  local canonical=""
+  if [ "$model_flag_seen" -eq 1 ]; then
+    canonical="$(resolve_model_alias "$model_alias")"
+  fi
   local prompt="${1:-}"
   shift || true
   if [ -z "$prompt" ]; then
@@ -340,8 +311,7 @@ cmd_ask() {
   fi
   local path
   path="$(require_ready)"
-  if [ -n "$model_alias" ]; then
-    local canonical; canonical="$(resolve_model_alias "$model_alias")"
+  if [ -n "$canonical" ]; then
     with_model_override "$canonical" -- "$path" -p "$prompt" "$@"
   else
     "$path" -p "$prompt" "$@"
@@ -371,13 +341,37 @@ cmd_image() {
   local description=""
   local name=""
   local output=""
-  # Parsuje --name i --output gdziekolwiek w argumentach; reszta leci do
-  # description (user może mieszać kolejność flagi i tekstu).
   local positional=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --name)    name="${2:-}";   shift 2 ;;
-      --output)  output="${2:-}"; shift 2 ;;
+      --name)
+        if [ $# -ge 2 ]; then
+          name="$2"; shift 2
+        else
+          echo "error: --name requires a value (e.g. --name coffee_cup)" >&2
+          exit 64
+        fi ;;
+      --name=*)
+        name="${1#--name=}"
+        if [ -z "$name" ]; then
+          echo "error: --name= requires a non-empty value" >&2
+          exit 64
+        fi
+        shift ;;
+      --output)
+        if [ $# -ge 2 ]; then
+          output="$2"; shift 2
+        else
+          echo "error: --output requires a path (e.g. --output /tmp/out.png)" >&2
+          exit 64
+        fi ;;
+      --output=*)
+        output="${1#--output=}"
+        if [ -z "$output" ]; then
+          echo "error: --output= requires a non-empty path" >&2
+          exit 64
+        fi
+        shift ;;
       --)        shift; positional+=("$@"); break ;;
       *)         positional+=("$1"); shift ;;
     esac
@@ -390,9 +384,6 @@ cmd_image() {
   local agy_path
   agy_path="$(require_ready)"
 
-  # Buduje prompt który (a) mówi agy żeby użył wbudowanego generate_image
-  # i (b) wymaga marker line, żeby wrapper deterministycznie znalazł
-  # zapisaną ścieżkę — niezależnie od gadania modelu.
   local name_clause=""
   if [ -n "$name" ]; then
     name_clause=" Save the image with name \"${name}\"."
@@ -405,21 +396,17 @@ IMAGE_PATH: <absolute filesystem path to the saved image>
 
 The IMAGE_PATH line is required — the calling wrapper parses it to locate the file."
 
-  # Capture response — drukowane verbatim, żeby user widział naturalną
-  # odpowiedź agy; potem wrapper dokleja własną linię z lokalizacją pliku.
   local response rc
   response="$("$agy_path" -p "$prompt" 2>&1)" || rc=$?
   rc="${rc:-0}"
   printf '%s\n' "$response"
 
-  # 1) Preferuj deterministyczny marker o który prosiliśmy.
   local src
   src="$(printf '%s' "$response" \
     | sed -n 's/^[[:space:]]*IMAGE_PATH:[[:space:]]*//p' \
     | tail -n1)"
 
-  # 2) Fallback: scrapuj jakiekolwiek absolutne /path/.../*.{png,jpg,jpeg,webp}
-  #    z odpowiedzi (agy czasem wspomina ścieżkę bez markera).
+  # Fallback when the model skips the marker line.
   if [ -z "$src" ] || [ ! -f "$src" ]; then
     src="$(printf '%s' "$response" \
       | grep -oE '/[^[:space:]]+\.(png|jpg|jpeg|webp)' \
@@ -481,12 +468,7 @@ Underlying CLI
 HELP
 }
 
-# -----------------------------------------------------------------------------
-# Dispatch
-# -----------------------------------------------------------------------------
-
 main() {
-  # Recovery po ewentualnym SIGKILLowanym poprzednim runie.
   restore_orphaned_backup 2>/dev/null || true
 
   case "${1:-}" in
@@ -499,10 +481,7 @@ main() {
   esac
 }
 
-# Sourcing guard: gdy plik jest źródłowany (np. przez unit testy),
-# dispatch jest pomijany, żeby można było wołać poszczególne funkcje
-# bezpośrednio. Defensywne `${...:-}` chronią przed `set -u` w trakcie
-# sourcing — niektóre shell-e nie inicjalizują BASH_SOURCE przy source.
+# Skip dispatch when sourced (lets unit tests call functions directly).
 if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
   main "$@"
 fi

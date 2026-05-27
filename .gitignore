@@ -6,7 +6,10 @@ node_modules/
 .idea/
 .vscode/
 DISTRIBUTION.md
+distribution-plan-*.html
+articles/
 
 # Local artefakty narzędzi — antigravity per-project state i playwright skill state.
 .antigravitycli/
 .playwright-cli/
+.notes/
