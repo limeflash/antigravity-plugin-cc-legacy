@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest something new or different.
+title: "feat: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please skim
+        [CONTRIBUTING.md](https://github.com/limeflash/antigravity-plugin-cc/blob/main/CONTRIBUTING.md)
+        — it lists what's actively wanted and what'll be declined.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the user-facing pain point, not the implementation.
+        "I want `/agy:foo` because today I have to do bar, baz, quux."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed design (rough)
+      description: |
+        How would you invoke this? Slash command? Flag? Hook? Sketch
+        the surface — it doesn't have to be finished.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Can the user do this today with `agy` directly, or by combining
+        existing `/agy:*` commands? Why isn't that enough?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Out-of-scope check
+      options:
+        - label: "This does NOT require `--dangerously-skip-permissions` by default."
+        - label: "This does NOT add a Node.js requirement for an existing Bash-only command."
+        - label: "This works (or can be made to work) on macOS, Linux, and WSL."

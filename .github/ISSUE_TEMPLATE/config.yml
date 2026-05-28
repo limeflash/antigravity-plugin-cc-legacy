@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/limeflash/antigravity-plugin-cc/security/advisories/new
+    about: |
+      Report a security vulnerability privately. Do not use a public
+      issue for security reports.
+  - name: agy CLI bug or question
+    url: https://github.com/google-antigravity/antigravity-cli/issues
+    about: |
+      Issues with `agy` itself (not this plugin's wrapper) go upstream
+      to Google's Antigravity CLI repository.
+  - name: Claude Code bug or question
+    url: https://github.com/anthropics/claude-code/issues
+    about: |
+      Issues with Claude Code itself go upstream to Anthropic's repo.
