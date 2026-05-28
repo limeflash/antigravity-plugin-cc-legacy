@@ -21,12 +21,15 @@ have.
 
 ## What you get
 
+### Synchronous Bash wrapper (no Node.js required)
+
 - **`/agy:setup`** — verify `agy` is installed and authenticated; can install
   it for you if it is missing.
 - **`/agy:ask [--model <alias>] <prompt>`** — one-shot prompt through `agy -p`;
   returns the raw response.
 - **`/agy:delegate [--background] [--model <alias>] <task>`** — hand a task
-  to the `agy:runner` subagent. `--background` for long jobs.
+  to the `agy:runner` subagent. `--background` for long jobs (uses Claude
+  Code's subagent mechanism).
 - **`/agy:research [--background] [--model <alias>] <topic>`** — delegate a
   deep-research investigation; wraps the topic in a structured prompt and
   routes through `agy:runner`.
@@ -34,12 +37,33 @@ have.
   `generate_image` tool (Imagen under the hood). Optional `--name` and
   `--output`.
 - **`/agy:review [focus]`** — ask Antigravity to review your current
-  `git diff`.
+  `git diff`. Aborts with a warning if the diff appears to contain
+  secrets (override via `AGY_REVIEW_ALLOW_SECRETS=1`).
 - **`/agy:help`** — show all commands, supported `--model` aliases, and
   canonical model names.
 - **`agy:runner` subagent** — thin forwarding wrapper around the Antigravity
   CLI; available as `subagent_type: "agy:runner"` for programmatic
   delegation.
+
+### Node.js companion (Phase 2 — Node 18.18+ required)
+
+Stateful workflows with persistent job records under
+`<repo>/.agy-plugin/`. Re-implementation of the codex-plugin-cc pattern
+adapted for `agy`. Node.js is **only** needed if you use these
+commands; the Bash wrapper above keeps working without it.
+
+- **`/agy:rescue [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>`**
+  — like `/agy:delegate`, but with our own job control. Foreground by
+  default; `--background` returns a job id you can check on later;
+  `--background --wait` blocks here until the job ends.
+- **`/agy:status [task-id]`** — list recent jobs in this workspace, or
+  show the detail block for one. Detects orphaned `running` records
+  whose worker process has died.
+- **`/agy:result [task-id]`** — print the captured output of a job
+  (defaults to the latest). Useful right after `--background` returns
+  or after `--wait` runs out.
+- **`/agy:cancel [task-id]`** — `SIGTERM` the job's worker, escalate
+  to `SIGKILL` after a 5-second grace, and mark the record canceled.
 
 ## Requirements
 
@@ -224,17 +248,23 @@ model and keep working" — which is the whole point of delegating to `agy`.
 
 Tracking parity with `openai/codex-plugin-cc`. Phased plan:
 
-- **Phase 1 — Foundation** (in progress)
+- **Phase 1 — Foundation** ✅
   - [x] Fork attribution (`NOTICE`, updated `LICENSE`, marketplace renamed
         to `limeflash-antigravity`).
   - [x] Validate `IMAGE_PATH` stays inside the `agy` artifacts dir
         before `cp` — closes a low-severity exfil vector.
   - [x] Pre-flight secret scan on `git diff` before `/agy:review`.
   - [x] CI: shellcheck + bats unit tests on every PR.
-- **Phase 2 — Codex-plugin-cc parity**
-  - [ ] `/agy:rescue` with `--background`, `--wait`, `--resume`,
+  - [x] Community files: `SECURITY.md`, `CONTRIBUTING.md`, issue/PR
+        templates, dependabot.
+- **Phase 2 — codex-plugin-cc parity** (in progress)
+  - [x] Node.js companion scaffold + state machine
+        (`lib/state.mjs`, `lib/job-control.mjs`,
+        `lib/tracked-jobs.mjs`, …).
+  - [x] `/agy:rescue` with `--background`, `--wait`, `--resume`,
         `--fresh` and PID-file-based job control.
-  - [ ] `/agy:status`, `/agy:result`, `/agy:cancel`.
+  - [x] `/agy:status`, `/agy:result`, `/agy:cancel`.
+  - [x] CI: vitest matrix on Node 18.18 / 20 / 22.
   - [ ] `/agy:review --base <ref>` for branch review.
   - [ ] `/agy:adversarial-review` (steerable challenge-mode review).
   - [ ] Optional Stop-gate review hook.

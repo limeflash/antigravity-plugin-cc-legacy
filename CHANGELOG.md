@@ -15,35 +15,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0-dev] - unreleased (limeflash fork)
 
-### Changed
-- Fork attribution: `LICENSE` now lists both copyright holders; new
-  `NOTICE` file documents the fork lineage and the codex-plugin-cc
-  roadmap reference.
-- Marketplace renamed `antigravity-cc` → `limeflash-antigravity` to avoid
-  collision when both marketplaces are added to the same Claude Code
-  install. Install command becomes
-  `/plugin install agy@limeflash-antigravity`.
-- `plugin.json` gains `homepage`, `repository`, and `license` fields
-  pointing at the fork.
+### Added — Phase 2 (codex-plugin-cc parity)
+- **`/agy:rescue`** — Node.js companion alternative to `/agy:delegate`
+  with background/foreground execution, optional `--wait`, `--resume`,
+  `--fresh`, and per-call `--model`. Background runs are detached
+  Node workers; foreground runs invoke agy synchronously and print
+  the captured output.
+- **`/agy:status [id|prefix]`** — list recent jobs in this workspace,
+  or show the detail block for a single job. Liveness-aware: a record
+  that claims `running` but whose PID is dead is rendered as `failed`.
+- **`/agy:result [id|prefix]`** — print the captured stdout/stderr of
+  a job (defaults to the latest).
+- **`/agy:cancel [id|prefix]`** — `SIGTERM` the worker, `SIGKILL`
+  after a 5-second grace, mark the record `canceled`. Idempotent.
+- **Node.js companion** at `plugins/agy/scripts/agy-companion.mjs`
+  with `lib/{args,fs,process,state,job-control,tracked-jobs,
+  workspace,render,agy}.mjs`. Re-implementation of the
+  codex-plugin-cc pattern; no source code copied from upstream.
+  Apache 2.0 ported lib files would land with header attribution if
+  added later (see CONTRIBUTING.md).
+- **Job state directory**: per-repo at `<repo>/.agy-plugin/`. Records
+  are atomic-JSON; logs land in `logs/<id>.log`; PID files in
+  `runtime/<id>.pid`. `.gitignore`d by default.
+- **CI**: vitest matrix on Node 18.18 / 20 / 22.
+- **138 new vitest cases** covering args, fs, process, state,
+  job-control, tracked-jobs, workspace, render, agy, and the
+  end-to-end command surface.
 
-### Added
-- Roadmap section in `README.md` tracking parity with
-  `openai/codex-plugin-cc` (Phases 1–3).
-- `cmd_image`: validate the resolved `IMAGE_PATH` lives under
-  `~/.gemini/antigravity-cli/{brain,scratch,cache}/` before copying it
-  via `--output`. Closes a low-severity vector where a prompt-injected
-  reply pointing at `/etc/passwd` (or any host file) could be written
-  into the user's project. Exit code 66 when the path is outside the
-  allowlist.
-- `cmd_review`: pre-flight scan of the diff for common secret patterns
-  (AWS keys, GitHub PATs, Slack tokens, OpenAI/Anthropic-style keys,
-  PEM private-key blocks, inline credential assignments). Aborts with
-  exit 65 if any match. Opt-in escape hatch:
-  `AGY_REVIEW_ALLOW_SECRETS=1`. Best-effort guardrail, not a substitute
-  for gitleaks.
-- Two new internal helpers: `_canonicalize_path`,
+### Added — Phase 1 (foundation)
+- Fork attribution: `LICENSE` lists both copyright holders; new
+  `NOTICE` documents fork lineage and the codex-plugin-cc roadmap
+  reference.
+- `cmd_image` guardrail: validate the resolved `IMAGE_PATH` lives
+  under `~/.gemini/antigravity-cli/{brain,scratch,cache}/` before
+  copying via `--output`. Closes a low-severity prompt-injection
+  exfil vector. Exit code 66 when outside the allowlist.
+- `cmd_review` guardrail: pre-flight scan of the diff for common
+  secret patterns (AWS keys, GitHub PATs, Slack tokens,
+  OpenAI/Anthropic-style keys, PEM private-key blocks, inline
+  credential assignments). Aborts with exit 65 if any match. Opt-in
+  escape hatch via `AGY_REVIEW_ALLOW_SECRETS=1`.
+- Three new internal Bash helpers: `_canonicalize_path`,
   `_image_source_in_allowlist`, `_scan_diff_for_secrets`. All
   bash-3.2-compatible so macOS `/bin/bash` keeps working.
+- CI: shellcheck + bats matrix (Ubuntu + macOS bash 3.2).
+- Community files: `SECURITY.md`, `CONTRIBUTING.md`, issue templates,
+  PR template, dependabot config.
+- README roadmap section tracking parity with codex-plugin-cc.
+
+### Changed
+- Marketplace renamed `antigravity-cc` → `limeflash-antigravity`.
+  Install command: `/plugin install agy@limeflash-antigravity`.
+- `plugin.json` gains `homepage`, `repository`, and `license` fields
+  pointing at the fork.
 
 ## [0.4.1] - 2026-05-27
 

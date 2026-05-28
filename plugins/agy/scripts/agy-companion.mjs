@@ -13,16 +13,37 @@
 
 import process from "node:process";
 import path from "node:path";
+import { promises as fsp } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs } from "./lib/args.mjs";
+import { parseArgs, joinPositional } from "./lib/args.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
-import { runJobWorker } from "./lib/tracked-jobs.mjs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  runJobWorker,
+  startTrackedJob,
+  cancelJob,
+  waitForJob,
+} from "./lib/tracked-jobs.mjs";
+import {
+  buildStatusSnapshot,
+  resolveJob,
+  resolveCancelable,
+} from "./lib/job-control.mjs";
+import { jobLogPath } from "./lib/state.mjs";
+import {
+  renderStatusList,
+  renderJobDetail,
+  renderResult,
+  renderCancelReport,
+} from "./lib/render.mjs";
+import { findAgyBinary } from "./lib/agy.mjs";
 
 const VERSION = "0.5.0-dev";
+
+const RESCUE_SCHEMA = {
+  boolean: ["background", "wait", "resume", "fresh"],
+  value: ["model", "base"],
+};
 
 function printUsage(stream = process.stdout) {
   stream.write(
@@ -32,19 +53,21 @@ function printUsage(stream = process.stdout) {
       "Usage:",
       "  node agy-companion.mjs <subcommand> [args...]",
       "",
-      "Subcommands (Phase 2 scaffold — most are stubs):",
+      "Subcommands:",
+      "  rescue [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>",
+      "                       Delegate a task to agy. --background returns a job id;",
+      "                       --wait blocks until the job ends (or 10 min default).",
+      "  status [task-id]     Show a single job, or the recent 10 if id omitted.",
+      "  result [task-id]     Print the captured output of a (usually completed) job.",
+      "  cancel [task-id]     Send SIGTERM to a running job; SIGKILL after a grace.",
       "  version              Print the companion version as JSON.",
       "  help, -h, --help     Show this message.",
       "",
       "Planned (not yet implemented):",
-      "  rescue [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>",
-      "  status [task-id]",
-      "  result [task-id]",
-      "  cancel [task-id]",
       "  review --base <ref> [--background] [--wait] [focus]",
       "  adversarial-review [--base <ref>] [--background] [--wait] [focus]",
       "",
-      "See the README and CHANGELOG for which commands are live.",
+      "See the README and CHANGELOG for the latest surface.",
       "",
     ].join("\n"),
   );
@@ -67,10 +90,179 @@ async function cmdRunJob(args) {
   const workspaceRoot = process.env.AGY_JOB_WORKSPACE
     ?? await resolveWorkspaceRoot();
   const finalStatus = await runJobWorker(workspaceRoot, jobId);
-  // Exit 0 for completed/canceled, non-zero for failed so the parent
-  // (if any) can observe success/failure via the OS, separate from
-  // the on-disk record.
   process.exit(finalStatus === "completed" || finalStatus === "canceled" ? 0 : 1);
+}
+
+/**
+ * /agy:rescue handler. Foreground by default; background when
+ * `--background` is set. The slash command file calls us, we don't
+ * call any subagent — Claude Code's subagent mechanism is for
+ * /agy:delegate which is unchanged.
+ */
+async function cmdRescue(argv) {
+  const parsed = parseArgs(argv, RESCUE_SCHEMA);
+  if (parsed.errors.length > 0) {
+    process.stderr.write(parsed.errors.map((e) => `error: ${e}`).join("\n") + "\n");
+    process.exit(64);
+  }
+  const task = joinPositional(parsed);
+  if (!task) {
+    process.stderr.write("rescue: task description is required\n");
+    process.exit(64);
+  }
+  const workspaceRoot = await resolveWorkspaceRoot();
+  const agyBin = await findAgyBinary();
+  if (!agyBin) {
+    process.stderr.write(
+      "rescue: cannot find the `agy` binary. Run /agy:setup first or install:\n" +
+        "  curl -fsSL https://antigravity.google/cli/install.sh | bash\n",
+    );
+    process.exit(127);
+  }
+
+  const background = parsed.flags.background;
+  const wait = parsed.flags.wait;
+  // Forward unknown flags + values back as agy-native args (e.g.
+  // --sandbox, --print-timeout 20m).
+  const extra = [...parsed.extra];
+  if (parsed.flags.resume) extra.push("--continue");
+
+  const record = await startTrackedJob(workspaceRoot, {
+    kind: "rescue",
+    task,
+    model: parsed.values.model ?? null,
+    args: extra,
+    background,
+    prompt: task,
+    agyBin,
+  });
+
+  if (!background) {
+    // Foreground: invoke the worker synchronously, then exit with its
+    // result. We don't re-spawn a detached child; we run agy ourselves.
+    const finalStatus = await runJobWorker(workspaceRoot, record.id);
+    const final = await reReadAndPrintLog(workspaceRoot, record.id);
+    process.exit(
+      finalStatus === "completed" || finalStatus === "canceled" ? 0 : 1,
+    );
+  }
+
+  // Background path: tell the user the job id (and optionally wait).
+  if (wait) {
+    process.stdout.write(
+      `Started agy job ${record.id} in background. Waiting...\n`,
+    );
+    const final = await waitForJob(workspaceRoot, record.id, {
+      timeoutMs: 600_000,
+      pollMs: 750,
+    });
+    if (!final) {
+      process.stderr.write(`Job ${record.id} disappeared while waiting.\n`);
+      process.exit(1);
+    }
+    await reReadAndPrintLog(workspaceRoot, record.id);
+    process.stdout.write(`\nJob ${record.id} ended with status: ${final.status}\n`);
+    process.exit(final.status === "completed" ? 0 : 1);
+  }
+
+  process.stdout.write(
+    [
+      `Started agy job ${record.id} in background.`,
+      `Check progress: /agy:status ${record.id}`,
+      `Read output:    /agy:result ${record.id}`,
+      `Cancel:         /agy:cancel ${record.id}`,
+      "",
+    ].join("\n"),
+  );
+}
+
+async function cmdStatus(argv) {
+  const workspaceRoot = await resolveWorkspaceRoot();
+  const [maybeId] = argv;
+  if (!maybeId) {
+    const snapshot = await buildStatusSnapshot(workspaceRoot, { limit: 10 });
+    process.stdout.write(renderStatusList(snapshot));
+    return;
+  }
+  const r = await resolveJob(workspaceRoot, maybeId);
+  if (!r.record) {
+    handleResolveFailure(maybeId, r);
+    return;
+  }
+  process.stdout.write(renderJobDetail(r.record));
+}
+
+async function cmdResult(argv) {
+  const workspaceRoot = await resolveWorkspaceRoot();
+  const [maybeId] = argv;
+  const r = await resolveJob(workspaceRoot, maybeId ?? "latest");
+  if (!r.record) {
+    handleResolveFailure(maybeId ?? "(latest)", r);
+    return;
+  }
+  let logContent = "";
+  try {
+    logContent = await fsp.readFile(
+      jobLogPath(workspaceRoot, r.record.id),
+      "utf8",
+    );
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  process.stdout.write(renderResult(r.record, logContent));
+}
+
+async function cmdCancel(argv) {
+  const workspaceRoot = await resolveWorkspaceRoot();
+  const [maybeId] = argv;
+  const r = await resolveCancelable(workspaceRoot, maybeId ?? "latest");
+  if (!r.record) {
+    handleResolveFailure(maybeId ?? "(latest)", r);
+    return;
+  }
+  const outcome = await cancelJob(workspaceRoot, r.record.id);
+  process.stdout.write(renderCancelReport(r.record.id, outcome));
+  if (!outcome.canceled) process.exit(1);
+}
+
+function handleResolveFailure(id, result) {
+  switch (result.reason) {
+    case "not-found":
+      process.stderr.write(`Job '${id}' not found in this workspace.\n`);
+      process.exit(2);
+    case "ambiguous":
+      process.stderr.write(
+        `Job id prefix '${id}' is ambiguous. Candidates:\n  - ` +
+          (result.candidates ?? []).join("\n  - ") +
+          "\n",
+      );
+      process.exit(2);
+    case "bad-id":
+      process.stderr.write(
+        `'${id}' is not a job id. Expected the form 'agy-xxxxxxxx' or a prefix of one.\n`,
+      );
+      process.exit(64);
+    case "not-cancelable":
+      process.stderr.write(
+        `Job '${id}' is already in terminal status (${result.existing?.status ?? "?"}).\n`,
+      );
+      process.exit(2);
+    default:
+      process.stderr.write(`Job '${id}': ${result.reason ?? "unknown error"}.\n`);
+      process.exit(2);
+  }
+}
+
+async function reReadAndPrintLog(workspaceRoot, jobId) {
+  try {
+    const content = await fsp.readFile(jobLogPath(workspaceRoot, jobId), "utf8");
+    process.stdout.write(content);
+    if (!content.endsWith("\n")) process.stdout.write("\n");
+    return content;
+  } catch (err) {
+    if (err.code === "ENOENT") return "";
+    throw err;
+  }
 }
 
 const HANDLERS = {
@@ -78,6 +270,10 @@ const HANDLERS = {
   help: () => printUsage(),
   "-h": () => printUsage(),
   "--help": () => printUsage(),
+  rescue: cmdRescue,
+  status: cmdStatus,
+  result: cmdResult,
+  cancel: cmdCancel,
   // Hidden internal commands (underscore prefix).
   "_run-job": cmdRunJob,
 };
@@ -119,4 +315,15 @@ if (isMainModule()) {
   });
 }
 
-export { main, cmdVersion, HANDLERS, VERSION, printUsage, isMainModule };
+export {
+  main,
+  cmdVersion,
+  cmdRescue,
+  cmdStatus,
+  cmdResult,
+  cmdCancel,
+  HANDLERS,
+  VERSION,
+  printUsage,
+  isMainModule,
+};

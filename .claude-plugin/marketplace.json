@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "agy",
-      "description": "Use the Google Antigravity CLI (`agy`) from Claude Code — slash commands /agy:setup, /agy:ask, /agy:delegate, /agy:research, /agy:review, /agy:image, /agy:help. Supports per-call model selection via --model. Roadmap: background jobs, branch-base review, adversarial review.",
+      "description": "Use the Google Antigravity CLI (`agy`) from Claude Code. Synchronous Bash wrapper: /agy:setup, /agy:ask, /agy:delegate, /agy:research, /agy:review, /agy:image, /agy:help. Node.js companion for stateful workflows: /agy:rescue (background-capable), /agy:status, /agy:result, /agy:cancel. Per-call model selection via --model. Secret-scan guardrails. Roadmap: branch-base review, adversarial review.",
       "version": "0.5.0-dev",
       "author": {
         "name": "limeflash",
