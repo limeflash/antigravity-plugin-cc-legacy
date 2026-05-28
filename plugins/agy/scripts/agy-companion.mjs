@@ -37,11 +37,18 @@ import {
   renderCancelReport,
 } from "./lib/render.mjs";
 import { findAgyBinary } from "./lib/agy.mjs";
+import { workingTreeDiff, branchDiff } from "./lib/git.mjs";
+import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 
 const VERSION = "0.5.0-dev";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh"],
+  value: ["model", "base"],
+};
+
+const REVIEW_SCHEMA = {
+  boolean: ["background", "wait"],
   value: ["model", "base"],
 };
 
@@ -60,12 +67,12 @@ function printUsage(stream = process.stdout) {
       "  status [task-id]     Show a single job, or the recent 10 if id omitted.",
       "  result [task-id]     Print the captured output of a (usually completed) job.",
       "  cancel [task-id]     Send SIGTERM to a running job; SIGKILL after a grace.",
+      "  review [--base <ref>] [--background] [--wait] [--model <a>] [focus]",
+      "                       Code review of working-tree changes, or branch vs --base.",
+      "  adversarial-review [--base <ref>] [--background] [--wait] [--model <a>] [focus]",
+      "                       Challenge-mode review: question the design, not just the lines.",
       "  version              Print the companion version as JSON.",
       "  help, -h, --help     Show this message.",
-      "",
-      "Planned (not yet implemented):",
-      "  review --base <ref> [--background] [--wait] [focus]",
-      "  adversarial-review [--base <ref>] [--background] [--wait] [focus]",
       "",
       "See the README and CHANGELOG for the latest surface.",
       "",
@@ -176,6 +183,105 @@ async function cmdRescue(argv) {
   );
 }
 
+/**
+ * Shared body for /agy:review and /agy:adversarial-review. The two
+ * differ only in (a) the prompt template they pass to agy and (b)
+ * the `kind` stored on the job record.
+ */
+async function runReviewCommand(argv, { adversarial }) {
+  const parsed = parseArgs(argv, REVIEW_SCHEMA);
+  if (parsed.errors.length > 0) {
+    process.stderr.write(parsed.errors.map((e) => `error: ${e}`).join("\n") + "\n");
+    process.exit(64);
+  }
+  const workspaceRoot = await resolveWorkspaceRoot();
+  const agyBin = await findAgyBinary();
+  if (!agyBin) {
+    process.stderr.write(
+      `${adversarial ? "adversarial-review" : "review"}: ` +
+        "cannot find the `agy` binary. Run /agy:setup first.\n",
+    );
+    process.exit(127);
+  }
+
+  let diffContext;
+  try {
+    diffContext = parsed.values.base
+      ? await branchDiff(workspaceRoot, parsed.values.base)
+      : await workingTreeDiff(workspaceRoot);
+  } catch (err) {
+    process.stderr.write(`error: ${err.message}\n`);
+    process.exit(1);
+  }
+  if (!diffContext.diff.trim()) {
+    process.stderr.write(
+      parsed.values.base
+        ? `No diff between this branch and \`${parsed.values.base}\` (merge-base: ${diffContext.mergeBase ?? "?"}). Nothing to review.\n`
+        : "No working-tree diff. Stage or make changes first.\n",
+    );
+    process.exit(1);
+  }
+
+  const focus = joinPositional(parsed);
+  const prompt = adversarial
+    ? buildAdversarialPrompt({ diffContext, focus })
+    : buildReviewPrompt({ diffContext, focus });
+
+  const background = parsed.flags.background;
+  const wait = parsed.flags.wait;
+  const taskSummary = adversarial
+    ? `adversarial-review${parsed.values.base ? ` (--base ${parsed.values.base})` : ""}${focus ? `: ${focus}` : ""}`
+    : `review${parsed.values.base ? ` (--base ${parsed.values.base})` : ""}${focus ? `: ${focus}` : ""}`;
+
+  const record = await startTrackedJob(workspaceRoot, {
+    kind: adversarial ? "adversarial-review" : "review",
+    task: taskSummary,
+    model: parsed.values.model ?? null,
+    args: parsed.extra,
+    background,
+    prompt,
+    agyBin,
+  });
+
+  if (!background) {
+    const finalStatus = await runJobWorker(workspaceRoot, record.id);
+    await reReadAndPrintLog(workspaceRoot, record.id);
+    process.exit(finalStatus === "completed" ? 0 : 1);
+  }
+
+  if (wait) {
+    process.stdout.write(`Started ${taskSummary} job ${record.id}. Waiting...\n`);
+    const final = await waitForJob(workspaceRoot, record.id, {
+      timeoutMs: 600_000,
+      pollMs: 750,
+    });
+    if (!final) {
+      process.stderr.write(`Job ${record.id} disappeared while waiting.\n`);
+      process.exit(1);
+    }
+    await reReadAndPrintLog(workspaceRoot, record.id);
+    process.stdout.write(`\nJob ${record.id} ended with status: ${final.status}\n`);
+    process.exit(final.status === "completed" ? 0 : 1);
+  }
+
+  process.stdout.write(
+    [
+      `Started ${taskSummary} job ${record.id} in background.`,
+      `Check progress: /agy:status ${record.id}`,
+      `Read output:    /agy:result ${record.id}`,
+      `Cancel:         /agy:cancel ${record.id}`,
+      "",
+    ].join("\n"),
+  );
+}
+
+async function cmdReview(argv) {
+  return runReviewCommand(argv, { adversarial: false });
+}
+async function cmdAdversarialReview(argv) {
+  return runReviewCommand(argv, { adversarial: true });
+}
+
 async function cmdStatus(argv) {
   const workspaceRoot = await resolveWorkspaceRoot();
   const [maybeId] = argv;
@@ -271,6 +377,8 @@ const HANDLERS = {
   "-h": () => printUsage(),
   "--help": () => printUsage(),
   rescue: cmdRescue,
+  review: cmdReview,
+  "adversarial-review": cmdAdversarialReview,
   status: cmdStatus,
   result: cmdResult,
   cancel: cmdCancel,
@@ -319,6 +427,8 @@ export {
   main,
   cmdVersion,
   cmdRescue,
+  cmdReview,
+  cmdAdversarialReview,
   cmdStatus,
   cmdResult,
   cmdCancel,
