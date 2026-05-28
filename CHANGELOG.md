@@ -13,7 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
-## [0.5.0-dev] - unreleased (limeflash fork)
+## [0.5.0] - 2026-05-28 (limeflash fork)
+
+First release of the limeflash fork. Brings the plugin to ~80%
+codex-plugin-cc parity: full job control (rescue, status, result,
+cancel), branch-base code review (`--base <ref>`), adversarial
+review, plus security guardrails on top of the upstream wrapper.
+Stop-gate review hook is roadmapped for 0.6.0 (safety review of
+hook semantics still pending).
 
 ### Added — Phase 2 (codex-plugin-cc parity)
 - **`/agy:rescue`** — Node.js companion alternative to `/agy:delegate`
@@ -21,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--fresh`, and per-call `--model`. Background runs are detached
   Node workers; foreground runs invoke agy synchronously and print
   the captured output.
+- **`/agy:review --base <ref>`** — branch-vs-base code review.
+  Computes the merge-base of HEAD and the base ref and diffs from
+  there, so unrelated changes that landed on the base after you
+  branched are excluded. Also supports `--background`, `--wait`,
+  `--model <alias>`. Without flags, the existing Bash wrapper runs
+  the working-tree review (back-compat preserved).
+- **`/agy:adversarial-review`** — challenge-mode review. The prompt
+  asks agy to question the design, propose at least one materially
+  different alternative with tradeoffs, name failure modes the
+  author didn't address, and conclude with ship / change / rethink.
+  Same flags as `/agy:review` (Node companion path only).
 - **`/agy:status [id|prefix]`** — list recent jobs in this workspace,
   or show the detail block for a single job. Liveness-aware: a record
   that claims `running` but whose PID is dead is rendered as `failed`.
@@ -30,17 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a 5-second grace, mark the record `canceled`. Idempotent.
 - **Node.js companion** at `plugins/agy/scripts/agy-companion.mjs`
   with `lib/{args,fs,process,state,job-control,tracked-jobs,
-  workspace,render,agy}.mjs`. Re-implementation of the
+  workspace,render,agy,git,prompts}.mjs`. Re-implementation of the
   codex-plugin-cc pattern; no source code copied from upstream.
   Apache 2.0 ported lib files would land with header attribution if
   added later (see CONTRIBUTING.md).
 - **Job state directory**: per-repo at `<repo>/.agy-plugin/`. Records
   are atomic-JSON; logs land in `logs/<id>.log`; PID files in
   `runtime/<id>.pid`. `.gitignore`d by default.
-- **CI**: vitest matrix on Node 18.18 / 20 / 22.
-- **138 new vitest cases** covering args, fs, process, state,
-  job-control, tracked-jobs, workspace, render, agy, and the
-  end-to-end command surface.
+- **CI**: vitest matrix on Node 18.18 / 20 / 22, plus bats on
+  Ubuntu and macOS bash 3.2, plus shellcheck, plus shfmt.
+- **158 new vitest cases** covering args, fs, process, state,
+  job-control, tracked-jobs, workspace, render, agy, git, prompts,
+  and the end-to-end command surface.
+
+### Not yet shipped (roadmapped for 0.6.0)
+- **Stop-gate review hook** — a Claude Code `Stop` hook that runs a
+  review on Claude's last turn and blocks the stop if HIGH-severity
+  issues are found. Deferred because the hook has session-blocking
+  semantics that need a careful safety review before shipping.
 
 ### Added — Phase 1 (foundation)
 - Fork attribution: `LICENSE` lists both copyright holders; new

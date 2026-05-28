@@ -40,7 +40,7 @@ import { findAgyBinary } from "./lib/agy.mjs";
 import { workingTreeDiff, branchDiff } from "./lib/git.mjs";
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 
-const VERSION = "0.5.0-dev";
+const VERSION = "0.5.0";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh"],

@@ -56,6 +56,14 @@ commands; the Bash wrapper above keeps working without it.
   — like `/agy:delegate`, but with our own job control. Foreground by
   default; `--background` returns a job id you can check on later;
   `--background --wait` blocks here until the job ends.
+- **`/agy:review --base <ref> [--background] [--wait] [--model <alias>] [focus]`**
+  — branch-vs-base code review. Computes the merge-base of HEAD and
+  the base ref so unrelated changes on the base branch are excluded.
+  Without flags, falls back to the synchronous Bash wrapper (above).
+- **`/agy:adversarial-review [--base <ref>] [--background] [--wait] [--model <alias>] [focus]`**
+  — challenge-mode review. The prompt asks `agy` to question the
+  design, propose alternatives, and end with a ship/change/rethink
+  verdict. Pairs well with `--model opus`.
 - **`/agy:status [task-id]`** — list recent jobs in this workspace, or
   show the detail block for one. Detects orphaned `running` records
   whose worker process has died.
@@ -257,17 +265,22 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
   - [x] CI: shellcheck + bats unit tests on every PR.
   - [x] Community files: `SECURITY.md`, `CONTRIBUTING.md`, issue/PR
         templates, dependabot.
-- **Phase 2 — codex-plugin-cc parity** (in progress)
+- **Phase 2 — codex-plugin-cc parity** (mostly done in 0.5.0)
   - [x] Node.js companion scaffold + state machine
         (`lib/state.mjs`, `lib/job-control.mjs`,
         `lib/tracked-jobs.mjs`, …).
   - [x] `/agy:rescue` with `--background`, `--wait`, `--resume`,
         `--fresh` and PID-file-based job control.
   - [x] `/agy:status`, `/agy:result`, `/agy:cancel`.
+  - [x] `/agy:review --base <ref>` for branch review (with
+        merge-base resolution so unrelated base-branch changes don't
+        leak into the diff).
+  - [x] `/agy:adversarial-review` (challenge-mode review with
+        ship/change/rethink verdict).
   - [x] CI: vitest matrix on Node 18.18 / 20 / 22.
-  - [ ] `/agy:review --base <ref>` for branch review.
-  - [ ] `/agy:adversarial-review` (steerable challenge-mode review).
-  - [ ] Optional Stop-gate review hook.
+  - [ ] Optional Stop-gate review hook (deferred to 0.6.0 — needs
+        a careful safety review before shipping; the hook can
+        block Claude responses).
 - **Phase 3 — Antigravity-specific**
   - [ ] Safe `/agy:scrape`, `/agy:doc-to-md` (no auto-approve, deny-list
         on input paths/URLs).
