@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        run: |
+          # Ubuntu-latest preinstalls shellcheck.
+          shellcheck --version
+          shellcheck -S warning plugins/agy/scripts/agy-run.sh
+
+  shfmt:
+    name: shfmt (format check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shfmt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shfmt
+      - name: Check formatting
+        # -d shows the diff and exits non-zero if reformat would change anything.
+        # -i 2 = 2-space indent (matches the rest of the script).
+        # We allow the existing style for now — this is informational, not blocking.
+        continue-on-error: true
+        run: shfmt -d -i 2 -ci plugins/agy/scripts/agy-run.sh
+
+  bats:
+    name: bats (unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bats
+          bats --version
+      - name: Run tests
+        run: bats tests/
+
+  bats-macos:
+    name: bats (macOS, bash 3.2)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show shell versions
+        run: |
+          # macOS ships bash 3.2; confirm we're really testing that path.
+          /bin/bash --version
+          bash --version
+      - name: Install bats
+        run: brew install bats-core
+      - name: Run tests (with macOS /bin/bash 3.2)
+        # Force the legacy bash so we catch any bash-4-only syntax accidents.
+        env:
+          BATS_SHELL: /bin/bash
+        run: bats tests/
