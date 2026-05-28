@@ -16,6 +16,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs } from "./lib/args.mjs";
+import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
+import { runJobWorker } from "./lib/tracked-jobs.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,11 +54,32 @@ function cmdVersion() {
   process.stdout.write(`${JSON.stringify({ version: VERSION })}\n`);
 }
 
+/**
+ * Internal: invoked by the detached worker that startTrackedJob
+ * spawns. The user never types this. Hidden from `help` output.
+ */
+async function cmdRunJob(args) {
+  const [jobId] = args;
+  if (!jobId) {
+    process.stderr.write("agy-companion _run-job: missing job id\n");
+    process.exit(64);
+  }
+  const workspaceRoot = process.env.AGY_JOB_WORKSPACE
+    ?? await resolveWorkspaceRoot();
+  const finalStatus = await runJobWorker(workspaceRoot, jobId);
+  // Exit 0 for completed/canceled, non-zero for failed so the parent
+  // (if any) can observe success/failure via the OS, separate from
+  // the on-disk record.
+  process.exit(finalStatus === "completed" || finalStatus === "canceled" ? 0 : 1);
+}
+
 const HANDLERS = {
   version: cmdVersion,
   help: () => printUsage(),
   "-h": () => printUsage(),
   "--help": () => printUsage(),
+  // Hidden internal commands (underscore prefix).
+  "_run-job": cmdRunJob,
 };
 
 async function main(argv) {
