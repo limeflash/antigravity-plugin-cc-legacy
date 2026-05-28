@@ -1,4 +1,15 @@
-# agy — Antigravity CLI plugin for Claude Code
+# agy — Antigravity CLI plugin for Claude Code (limeflash fork)
+
+> **Fork notice.** This is a fork of
+> [`simplybychris/antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc)
+> maintained by [@limeflash](https://github.com/limeflash). The upstream
+> is deliberately small ("just Bash and `agy`"); this fork extends it
+> toward feature parity with
+> [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc):
+> background job control (`/agy:status`, `/agy:result`, `/agy:cancel`),
+> branch-base code review (`--base <ref>`), adversarial review, optional
+> stop-gate review hook, and a CI-tested wrapper. See [NOTICE](./NOTICE)
+> and [CHANGELOG.md](./CHANGELOG.md) for what changed.
 
 Use Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from
 inside Claude Code. Delegate tasks to the `agy:runner` subagent, run quick
@@ -6,8 +17,7 @@ prompts, or get a second-opinion code review — without leaving your editor.
 
 This plugin is for Claude Code users who already use (or want to start using)
 Antigravity and want a smooth way to call it from the workflow they already
-have. Intentionally small: no Node runtime, no broker, no review-gate hook —
-just Bash and `agy`.
+have.
 
 ## What you get
 
@@ -46,10 +56,16 @@ just Bash and `agy`.
 In Claude Code, run these three slash commands in order:
 
 ```text
-/plugin marketplace add simplybychris/antigravity-plugin-cc
-/plugin install agy@antigravity-cc
+/plugin marketplace add limeflash/antigravity-plugin-cc
+/plugin install agy@limeflash-antigravity
 /reload-plugins
 ```
+
+> Prefer the upstream? Swap the first two lines for
+> `/plugin marketplace add simplybychris/antigravity-plugin-cc` and
+> `/plugin install agy@antigravity-cc`. The slash command surface
+> (`/agy:*`) is identical; the fork adds capabilities, it doesn't rename
+> existing ones.
 
 Then verify everything is wired up:
 
@@ -204,12 +220,41 @@ Subagents in Claude Code can run in the background and report back when
 finished. That is the workflow you want when you "hand this off to another
 model and keep working" — which is the whole point of delegating to `agy`.
 
+## Roadmap (fork)
+
+Tracking parity with `openai/codex-plugin-cc`. Phased plan:
+
+- **Phase 1 — Foundation** (in progress)
+  - [x] Fork attribution (`NOTICE`, updated `LICENSE`, marketplace renamed
+        to `limeflash-antigravity`).
+  - [x] Validate `IMAGE_PATH` stays inside the `agy` artifacts dir
+        before `cp` — closes a low-severity exfil vector.
+  - [x] Pre-flight secret scan on `git diff` before `/agy:review`.
+  - [x] CI: shellcheck + bats unit tests on every PR.
+- **Phase 2 — Codex-plugin-cc parity**
+  - [ ] `/agy:rescue` with `--background`, `--wait`, `--resume`,
+        `--fresh` and PID-file-based job control.
+  - [ ] `/agy:status`, `/agy:result`, `/agy:cancel`.
+  - [ ] `/agy:review --base <ref>` for branch review.
+  - [ ] `/agy:adversarial-review` (steerable challenge-mode review).
+  - [ ] Optional Stop-gate review hook.
+- **Phase 3 — Antigravity-specific**
+  - [ ] Safe `/agy:scrape`, `/agy:doc-to-md` (no auto-approve, deny-list
+        on input paths/URLs).
+  - [ ] Windows-native (PowerShell) port.
+
+See [CHANGELOG.md](./CHANGELOG.md) for shipped changes.
+
 ## Inspiration
 
-Inspired by
-[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), which
-does the same thing for Codex. This plugin is intentionally smaller.
+This fork extends
+[`simplybychris/antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc),
+which is itself inspired by
+[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc).
+The goal here is to keep simplybychris's security-conscious defaults (no
+`--dangerously-skip-permissions`, no global `--add-dir <CWD>`) while
+reaching the codex-plugin-cc feature surface.
 
 ## License
 
-[MIT](./LICENSE).
+[MIT](./LICENSE). See [NOTICE](./NOTICE) for upstream attribution.

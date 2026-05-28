@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Fork lineage.** Versions `0.5.0-dev` onward are maintained by
+> [@limeflash](https://github.com/limeflash) in
+> [limeflash/antigravity-plugin-cc](https://github.com/limeflash/antigravity-plugin-cc),
+> forked from
+> [simplybychris/antigravity-plugin-cc](https://github.com/simplybychris/antigravity-plugin-cc)
+> at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
+> the upstream history, preserved for traceability.
+
+## [0.5.0-dev] - unreleased (limeflash fork)
+
+### Changed
+- Fork attribution: `LICENSE` now lists both copyright holders; new
+  `NOTICE` file documents the fork lineage and the codex-plugin-cc
+  roadmap reference.
+- Marketplace renamed `antigravity-cc` → `limeflash-antigravity` to avoid
+  collision when both marketplaces are added to the same Claude Code
+  install. Install command becomes
+  `/plugin install agy@limeflash-antigravity`.
+- `plugin.json` gains `homepage`, `repository`, and `license` fields
+  pointing at the fork.
+
+### Added
+- Roadmap section in `README.md` tracking parity with
+  `openai/codex-plugin-cc` (Phases 1–3).
+
 ## [0.4.1] - 2026-05-27
 
 ### Fixed
