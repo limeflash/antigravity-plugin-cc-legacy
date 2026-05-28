@@ -63,8 +63,29 @@ jobs:
           bash --version
       - name: Install bats
         run: brew install bats-core
-      - name: Run tests (with macOS /bin/bash 3.2)
+      - name: Run bash tests (with macOS /bin/bash 3.2)
         # Force the legacy bash so we catch any bash-4-only syntax accidents.
+        # bats only loads *.bats files, so the *.test.mjs vitest files
+        # in the same directory are silently ignored.
         env:
           BATS_SHELL: /bin/bash
         run: bats tests/
+
+  node:
+    name: Node (vitest)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18.18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run vitest
+        run: npm test

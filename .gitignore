@@ -13,3 +13,10 @@ articles/
 .antigravitycli/
 .playwright-cli/
 .notes/
+
+# Plugin runtime state (job records, logs, PID files for /agy:rescue jobs).
+.agy-plugin/
+
+# Vitest / coverage output.
+coverage/
+.nyc_output/
