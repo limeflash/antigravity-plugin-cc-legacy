@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `cmd_image`: validate that the resolved `IMAGE_PATH` lives under
+  `~/.gemini/antigravity-cli/{brain,scratch,cache}/` before copying
+  via `--output`. Closes a low-severity vector where a prompt-injected
+  reply pointing at `/etc/passwd` (or any host file) could be written
+  into the user's project. Exit code 66 when the path is outside the
+  allowlist.
+- `cmd_review`: pre-flight scan of the diff for common secret patterns
+  (AWS keys, GitHub PATs, Slack tokens, OpenAI/Anthropic-style keys,
+  PEM private-key blocks, inline credential assignments). Aborts with
+  exit 65 if any match. Opt-in escape hatch:
+  `AGY_REVIEW_ALLOW_SECRETS=1`. Best-effort guardrail, not a substitute
+  for `gitleaks` / `trufflehog`.
+- Three new internal helpers in `agy-run.sh`: `_canonicalize_path`,
+  `_image_source_in_allowlist`, `_scan_diff_for_secrets`. All
+  bash-3.2-compatible so macOS `/bin/bash` keeps working.
+
 ## [0.4.1] - 2026-05-27
 
 ### Fixed

@@ -48,6 +48,92 @@ j_esc() {
   printf '%s' "$s"
 }
 
+# Resolve a path to absolute canonical form, falling back gracefully on
+# platforms that lack `realpath` or GNU `readlink -f` (macOS /bin/bash,
+# BusyBox). If no canonicalization tool is available, returns the input
+# unchanged — callers must treat the result as untrusted in that case.
+_canonicalize_path() {
+  local p="$1"
+  [ -n "$p" ] || return 1
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$p" 2>/dev/null && return 0
+  fi
+  if command -v readlink >/dev/null 2>&1; then
+    readlink -f "$p" 2>/dev/null && return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$p" 2>/dev/null && return 0
+  fi
+  printf '%s' "$p"
+}
+
+# Returns 0 iff $1 resolves to a path inside one of `agy`'s known
+# artifacts directories. Used by cmd_image to refuse copying an
+# attacker-controlled IMAGE_PATH (e.g. via prompt injection in the
+# model's reply pointing at `/etc/passwd`).
+_image_source_in_allowlist() {
+  local src="$1"
+  [ -n "$src" ] || return 1
+  local canonical; canonical="$(_canonicalize_path "$src")" || return 1
+  local prefix
+  for prefix in \
+      "$HOME/.gemini/antigravity-cli/brain/" \
+      "$HOME/.gemini/antigravity-cli/scratch/" \
+      "$HOME/.gemini/antigravity-cli/cache/"; do
+    case "$canonical" in
+      "$prefix"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Best-effort scan for common secret patterns in added lines of a git
+# diff. Returns 0 (silent) if nothing found, 1 if any pattern matched
+# (writes one matched pattern label per line to stdout). This is a
+# guardrail, not a substitute for a real secret scanner like gitleaks —
+# patterns are deliberately conservative to keep false positives low.
+#
+# Patterns and labels are kept in parallel arrays because some patterns
+# legitimately contain `|` (alternation), so a single-string
+# "pattern|label" format is ambiguous.
+_scan_diff_for_secrets() {
+  local diff_text="$1"
+  local added
+  # Only scan added lines (starting with single `+`, not the `+++` header).
+  added="$(printf '%s\n' "$diff_text" | grep -E '^\+[^+]' || true)"
+  [ -n "$added" ] || return 0
+  local pats=(
+    'AKIA[0-9A-Z]{16}'
+    'ASIA[0-9A-Z]{16}'
+    'gh[pousr]_[A-Za-z0-9]{36,}'
+    'xox[baprs]-[A-Za-z0-9-]{10,}'
+    'sk-[A-Za-z0-9]{20,}'
+    '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+    '(api[_-]?key|secret|token|password|access[_-]?key)[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_+/=\-]{16,}'
+  )
+  local labels=(
+    'AWS access key'
+    'AWS STS token'
+    'GitHub personal access token'
+    'Slack token'
+    'OpenAI/Anthropic-style API key'
+    'PEM private key block'
+    'inline credential assignment'
+  )
+  local hits=()
+  local i
+  for i in "${!pats[@]}"; do
+    # `-e <pattern>` is required because some patterns start with `-`
+    # (e.g. PEM headers), which grep would otherwise treat as an option.
+    if printf '%s\n' "$added" | grep -aEi -e "${pats[$i]}" >/dev/null 2>&1; then
+      hits+=("${labels[$i]}")
+    fi
+  done
+  [ "${#hits[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${hits[@]}"
+  return 1
+}
+
 cmd_check() {
   if ! path="$(find_agy | head -n1)"; then
     cat <<JSON
@@ -332,6 +418,27 @@ cmd_review() {
     echo "error: no git diff found in $repo_dir. Stage or make changes first." >&2
     exit 1
   fi
+
+  # Guardrail: refuse to ship a diff containing obvious secrets unless the
+  # user opted in via AGY_REVIEW_ALLOW_SECRETS=1. Best-effort; false
+  # negatives are possible.
+  local secret_hits
+  if ! secret_hits="$(_scan_diff_for_secrets "$diff")"; then
+    {
+      echo
+      echo "[wrapper] WARNING: diff contains values matching common secret patterns:"
+      printf '%s\n' "$secret_hits" | sed 's/^/  - /'
+      echo
+      echo "  Sending it through agy will forward those values to Google's Gemini API."
+      if [ "${AGY_REVIEW_ALLOW_SECRETS:-0}" != "1" ]; then
+        echo "  Aborting. Set AGY_REVIEW_ALLOW_SECRETS=1 to proceed anyway, or remove"
+        echo "  the matching lines from your diff first."
+        exit 65
+      fi
+      echo "  Proceeding because AGY_REVIEW_ALLOW_SECRETS=1."
+    } >&2
+  fi
+
   local full
   full=$(printf '%s\n\nDiff:\n```diff\n%s\n```\n' "$focus" "$diff")
   "$path" -p "$full"
@@ -414,6 +521,20 @@ The IMAGE_PATH line is required — the calling wrapper parses it to locate the 
   fi
 
   if [ -n "$src" ] && [ -f "$src" ]; then
+    # Guardrail: refuse paths outside agy's artifacts dirs. Prevents a
+    # prompt-injected IMAGE_PATH (e.g. `/etc/passwd`) from being copied
+    # into the user's project via --output.
+    if ! _image_source_in_allowlist "$src"; then
+      {
+        echo
+        echo "[wrapper] error: refusing to use image source path outside agy's artifacts directory."
+        echo "[wrapper]        path: $src"
+        echo "[wrapper]        allowed prefixes: ~/.gemini/antigravity-cli/{brain,scratch,cache}/"
+        echo "[wrapper]        this can be caused by prompt injection in the model's reply;"
+        echo "[wrapper]        inspect agy's output above and re-run if it looks legitimate."
+      } >&2
+      return 66
+    fi
     echo
     echo "[wrapper] generated: $src"
     if [ -n "$output" ]; then
