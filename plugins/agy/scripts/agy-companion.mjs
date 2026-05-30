@@ -49,8 +49,9 @@ import {
   captureWorktreePatch,
 } from "./lib/git.mjs";
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
+import { scanDiffForSecrets } from "./lib/secrets.mjs";
 
-const VERSION = "0.5.4";
+const VERSION = "0.5.5";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
@@ -340,6 +341,36 @@ async function runReviewCommand(argv, { adversarial }) {
         : "No working-tree diff. Stage or make changes first.\n",
     );
     process.exit(1);
+  }
+
+  // Secret-scan guard (parity with the Bash /agy:review): don't ship a
+  // diff full of credentials to Gemini. Opt out with
+  // AGY_REVIEW_ALLOW_SECRETS=1.
+  const secretHits = scanDiffForSecrets(diffContext.diff);
+  if (secretHits.length > 0) {
+    if (process.env.AGY_REVIEW_ALLOW_SECRETS !== "1") {
+      process.stderr.write(
+        [
+          "error: the diff contains values matching common secret patterns:",
+          ...secretHits.map((h) => `  - ${h}`),
+          "",
+          "Reviewing it would forward those values to Google's Gemini API.",
+          "Remove them from the diff, or set AGY_REVIEW_ALLOW_SECRETS=1 to proceed.",
+          "",
+        ].join("\n"),
+      );
+      process.exit(65);
+    }
+    // Override set: proceed, but still warn (parity with the Bash
+    // wrapper) so a globally-set env var can't leak credentials silently.
+    process.stderr.write(
+      [
+        "WARNING: diff contains values matching common secret patterns:",
+        ...secretHits.map((h) => `  - ${h}`),
+        "Proceeding because AGY_REVIEW_ALLOW_SECRETS=1 — those values will be sent to Gemini.",
+        "",
+      ].join("\n"),
+    );
   }
 
   // Attach full content of (small) changed files so agy sees whole-file

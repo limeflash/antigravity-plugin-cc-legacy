@@ -403,6 +403,14 @@ _agy_capture() {
     prompt_path="$outfile"
     target_dir="$outdir"
   fi
+  # agy --print takes the whole prompt as ONE argv entry, so it must
+  # stay under the OS command-line limit (~32 KB on Windows) or the
+  # process fails with "Argument list too long" / ENAMETOOLONG. Cap the
+  # body (the write_file instruction is appended after, always intact).
+  local max_body="${AGY_PROMPT_MAX_CHARS:-26000}"
+  if [ "${#prompt}" -gt "$max_body" ]; then
+    prompt="${prompt:0:$max_body}"$'\n\n[...content truncated to fit the OS command-line length limit; some diff/file context was omitted...]'
+  fi
   local augmented
   augmented="$(printf '%s\n\n---\nOUTPUT INSTRUCTION (required): Use the write_file tool to write your COMPLETE response to this exact path:\n%s\nDo NOT print the answer to chat — that path is your only deliverable. After writing the file, stop.\n' "$prompt" "$prompt_path")"
 
@@ -499,8 +507,13 @@ cmd_review() {
   # flagging false positives for things just outside the window.
   local ctx="${AGY_REVIEW_CONTEXT:-25}"
   local diff
+  local -a diff_range=("HEAD")
   diff="$(git -C "$repo_dir" diff "-U${ctx}" HEAD 2>/dev/null || true)"
   if [ -z "$diff" ]; then
+    # Fall back to the unstaged diff — and sync the name-only file list
+    # below to the same range (was always "HEAD", starving full-file
+    # context of the fallback's files).
+    diff_range=()
     diff="$(git -C "$repo_dir" diff "-U${ctx}" 2>/dev/null || true)"
   fi
   if [ -z "$diff" ]; then
@@ -531,24 +544,35 @@ cmd_review() {
   # Full content of small changed files, so agy sees whole-file
   # structure (imports, guards) not just hunks. Cap per-file lines and
   # total bytes so a big changeset can't blow up the prompt.
-  local max_lines="${AGY_REVIEW_FULLFILE_MAX_LINES:-400}"
-  local budget="${AGY_REVIEW_FULLFILE_BUDGET_BYTES:-65536}"
+  # Defaults aligned with the Node companion (lib/git.mjs). Kept well
+  # under AGY_PROMPT_MAX_CHARS so the files block + diff don't get
+  # truncated mid-prompt.
+  local max_lines="${AGY_REVIEW_FULLFILE_MAX_LINES:-250}"
+  local budget="${AGY_REVIEW_FULLFILE_BUDGET_BYTES:-12288}"
   local files_block="" used=0
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     local abs="$repo_dir/$f"
-    [ -f "$abs" ] || continue
-    # skip binary (NUL byte present)
+    # Regular file only, and NOT a symlink (a symlinked path in the diff
+    # could point at an arbitrary host file like /etc/passwd).
+    [ -f "$abs" ] && [ ! -L "$abs" ] || continue
+    # skip binary (no NUL byte => text)
     if grep -qI . "$abs" 2>/dev/null; then :; else continue; fi
     local lc; lc="$(wc -l < "$abs" 2>/dev/null || echo 999999)"
     [ "$lc" -le "$max_lines" ] || continue
     local sz; sz="$(wc -c < "$abs" 2>/dev/null || echo 0)"
-    used=$((used + sz))
-    [ "$used" -le "$budget" ] || continue
+    # Only count toward the budget if it actually fits — otherwise a big
+    # file would inflate `used` and starve every later (small) file.
+    if [ "$((used + sz))" -le "$budget" ]; then
+      used=$((used + sz))
+    else
+      continue
+    fi
     local ext="${f##*.}"
-    files_block="${files_block}"$'\n'"### ${f}"$'\n'"\`\`\`${ext}"$'\n'"$(cat "$abs")"$'\n'"\`\`\`"$'\n'
-  done < <(git -C "$repo_dir" diff --name-only HEAD 2>/dev/null)
+    # 4-backtick fence so file content containing ``` doesn't break out.
+    files_block="${files_block}"$'\n'"### ${f}"$'\n'"\`\`\`\`${ext}"$'\n'"$(cat "$abs")"$'\n'"\`\`\`\`"$'\n'
+  done < <(git -C "$repo_dir" diff --name-only "${diff_range[@]}" 2>/dev/null)
 
   local full
   if [ -n "$files_block" ]; then

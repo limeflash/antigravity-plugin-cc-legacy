@@ -13,6 +13,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.5] - 2026-05-30 (limeflash fork)
+
+Dogfooding pass: ran the plugin's own `/agy:review` on the plugin's
+code and fixed every legitimate finding (two review rounds: 7 issues,
+then 4 parity gaps the fixes introduced). Also fixes the bug that made
+this possible to even find — large review prompts crashed.
+
+### Fixed
+- **`ENAMETOOLONG` on large reviews.** `agy --print` takes the whole
+  prompt as one argv entry; with `-U25` + embedded files a real review
+  exceeded the OS command-line limit (~32 KB) and crashed. Both the
+  companion (`capPromptForArgv`) and the Bash wrapper now hard-cap the
+  prompt, always preserving the write_file instruction, and the
+  embedded-files budget dropped to 12 KB. agy `--print` confirmed to
+  NOT read the prompt from stdin/a file, so capping is the only option.
+- **Secret-scan parity in the companion.** `/agy:review` /
+  `/agy:adversarial-review` (Node path) now scan the diff for secrets
+  before sending to Gemini, like the Bash `/agy:review` already did.
+  Patterns are case-insensitive (parity with `grep -i`); proceeding via
+  `AGY_REVIEW_ALLOW_SECRETS=1` prints a warning instead of staying
+  silent. New `lib/secrets.mjs` (+10 tests).
+- **`gatherFileContext` hardening.** `lstat` + skip symlinks (a
+  symlinked diff entry could otherwise pull `/etc/passwd` into the
+  prompt); `stat`-before-read size check (a huge generated file is
+  rejected without slurping it into memory).
+- **Bash full-file budget bug.** `used` was incremented before the
+  budget check, so one oversized file starved every later small file.
+- **4-backtick fences** around embedded file content (a file
+  containing ``` no longer breaks the prompt) — both wrapper and
+  prompts builder.
+- **Fallback file-list sync** in `workingTreeDiff` and the Bash
+  wrapper: when falling back to the unstaged diff, the name-only file
+  list now matches it (was always `HEAD`).
+- **Aligned defaults** between Bash and companion (250 lines / 12 KB)
+  and made the companion honor `AGY_REVIEW_FULLFILE_*` env vars.
+
+186 vitest pass.
+
 ## [0.5.4] - 2026-05-30 (limeflash fork)
 
 Cuts review false positives by giving agy real context. Motivated by a

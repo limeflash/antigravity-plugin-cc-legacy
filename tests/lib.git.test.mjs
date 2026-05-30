@@ -215,7 +215,11 @@ describe("gatherFileContext", () => {
     await fsp.writeFile(path.join(repo, "b.txt"), "y".repeat(100) + "\n");
     const r = await gatherFileContext(repo, ["a.txt", "b.txt"], { budgetBytes: 120 });
     expect(r.included.length).toBe(1);
-    expect(r.omitted.find((o) => o.reason === "budget exceeded")).toBeTruthy();
+    // The second file no longer fits — it's rejected by the pre-read
+    // size check ("too large (N bytes)") or the post-read budget check.
+    const b = r.omitted.find((o) => o.path === "b.txt");
+    expect(b).toBeTruthy();
+    expect(b.reason).toMatch(/too large|budget/);
   });
 
   it("skips binary content (NUL byte)", async () => {
@@ -223,5 +227,31 @@ describe("gatherFileContext", () => {
     const r = await gatherFileContext(repo, ["bin.dat"]);
     expect(r.included).toEqual([]);
     expect(r.omitted[0].reason).toBe("binary");
+  });
+});
+
+describe("gatherFileContext — safety edges (symlink, pre-read size)", () => {
+  it("skips a symlinked path instead of following it", async () => {
+    const target = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-tgt-"));
+    const secret = path.join(target, "secret.txt");
+    await fsp.writeFile(secret, "SENSITIVE\n");
+    const link = path.join(repo, "link.txt");
+    try {
+      await fsp.symlink(secret, link);
+    } catch {
+      return; // symlink not permitted (e.g. Windows w/o privilege) — skip
+    }
+    const r = await gatherFileContext(repo, ["link.txt"]);
+    expect(r.included).toEqual([]);
+    expect(r.omitted[0].reason).toMatch(/symlink/);
+    await fsp.rm(target, { recursive: true, force: true });
+  });
+
+  it("rejects a too-large file via stat without reading it all", async () => {
+    const big = path.join(repo, "big.bin");
+    await fsp.writeFile(big, "z".repeat(5000));
+    const r = await gatherFileContext(repo, ["big.bin"], { budgetBytes: 1000 });
+    expect(r.included).toEqual([]);
+    expect(r.omitted[0].reason).toMatch(/too large \(\d+ bytes\)/);
   });
 });

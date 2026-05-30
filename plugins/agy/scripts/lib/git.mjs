@@ -22,10 +22,20 @@ function reviewContextLines() {
 
 // Full-file-context limits: include the complete current content of a
 // changed file when it's small enough that agy benefits from seeing
-// the whole structure, capped so a big changeset can't blow up the
-// prompt.
-const FULL_FILE_MAX_LINES = 400;
-const FULL_FILE_TOTAL_BUDGET_BYTES = 64 * 1024;
+// the whole structure. The total budget MUST stay well under the OS
+// command-line length limit (~32 KB on Windows) because agy --print
+// takes the whole prompt as a single argv entry — exceeding it crashes
+// with ENAMETOOLONG. 12 KB of embedded files leaves room for the diff
+// and instructions; the prompt assembler applies a final hard cap on
+// top of this.
+// Env-overridable for parity with the Bash wrapper
+// (AGY_REVIEW_FULLFILE_MAX_LINES / AGY_REVIEW_FULLFILE_BUDGET_BYTES).
+function envInt(name, fallback) {
+  const v = parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+}
+const FULL_FILE_MAX_LINES = envInt("AGY_REVIEW_FULLFILE_MAX_LINES", 250);
+const FULL_FILE_TOTAL_BUDGET_BYTES = envInt("AGY_REVIEW_FULLFILE_BUDGET_BYTES", 12 * 1024);
 
 /** Throws if `git` isn't on PATH. */
 export async function ensureGitAvailable() {
@@ -89,11 +99,16 @@ export async function workingTreeDiff(cwd) {
   const root = await gitRoot(cwd);
   if (!root) throw new Error(`not in a git repo: ${cwd}`);
   const U = `-U${reviewContextLines()}`;
+  let range = ["HEAD"];
   let diff = (await runCaptured("git", ["-C", root, "diff", U, "HEAD"], { cwd: root })).stdout;
   if (!diff.trim()) {
+    // Fall back to the unstaged diff — and keep the file list in sync
+    // with it (the old code always used ["HEAD"], so full-file context
+    // missed the fallback's files).
+    range = [];
     diff = (await runCaptured("git", ["-C", root, "diff", U], { cwd: root })).stdout;
   }
-  const files = await diffFiles(root, ["HEAD"]);
+  const files = await diffFiles(root, range);
   return {
     scope: "working-tree",
     base: "HEAD",
@@ -156,11 +171,35 @@ export async function gatherFileContext(root, files, opts = {}) {
   let used = 0;
   for (const rel of files ?? []) {
     const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    // lstat (not stat): a symlinked file in the diff could point at an
+    // arbitrary host file (e.g. /etc/passwd); refuse to follow it into
+    // the prompt.
+    let st;
+    try {
+      st = await fsp.lstat(abs);
+    } catch {
+      omitted.push({ path: rel, reason: "missing/deleted" });
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      omitted.push({ path: rel, reason: "symlink (skipped)" });
+      continue;
+    }
+    if (!st.isFile()) {
+      omitted.push({ path: rel, reason: "not a regular file" });
+      continue;
+    }
+    // Size check BEFORE reading, so a giant generated/blob file can't
+    // be slurped into memory (OOM) just to be rejected afterward.
+    if (st.size > budget - used) {
+      omitted.push({ path: rel, reason: `too large (${st.size} bytes)` });
+      continue;
+    }
     let content;
     try {
       content = await fsp.readFile(abs, "utf8");
     } catch {
-      omitted.push({ path: rel, reason: "missing/deleted" });
+      omitted.push({ path: rel, reason: "unreadable" });
       continue;
     }
     if (content.includes("\0")) {

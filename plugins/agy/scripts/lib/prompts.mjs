@@ -41,10 +41,13 @@ function fullFilesBlock(diffContext) {
   ];
   for (const f of files) {
     const ext = (f.path.split(".").pop() || "").toLowerCase();
+    // Use a 4-backtick fence so files that themselves contain triple
+    // backticks (markdown, JS template strings) don't terminate the
+    // block early and corrupt the prompt structure.
     parts.push(`\n### ${f.path}`);
-    parts.push("```" + ext);
+    parts.push("````" + ext);
     parts.push(f.content.replace(/\n$/, ""));
-    parts.push("```");
+    parts.push("````");
   }
   const omitted = diffContext.omittedFiles ?? [];
   const tooBig = omitted.filter((o) => /too large|budget/.test(o.reason));

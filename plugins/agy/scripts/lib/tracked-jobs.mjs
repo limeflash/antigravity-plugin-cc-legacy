@@ -199,6 +199,35 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
  *
  * Returns the agy exit code.
  */
+// Max bytes for the prompt argv entry. Windows' CreateProcess caps the
+// whole command line at 32767 chars; leave generous margin for the exe
+// path and the other flags.
+const MAX_PROMPT_BYTES = 28000;
+
+/**
+ * Assemble body + suffix so the result stays under MAX_PROMPT_BYTES.
+ * The suffix (the write_file instruction) is always kept intact; only
+ * the body is trimmed, with a visible marker so the model knows context
+ * was cut. Exported for unit testing.
+ */
+export function capPromptForArgv(body, suffix, max = MAX_PROMPT_BYTES) {
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  const marker =
+    "\n\n[...content truncated to fit the OS command-line length limit; " +
+    "some diff/file context was omitted — read files directly if needed...]";
+  const budget = max - suffixBytes - Buffer.byteLength(marker, "utf8");
+  if (Buffer.byteLength(body, "utf8") <= budget) {
+    return body + suffix;
+  }
+  // Trim by bytes (slice by chars is fine for our mostly-ASCII prompts;
+  // re-check and shave if a multibyte char pushed us over).
+  let trimmed = body.slice(0, Math.max(0, budget));
+  while (Buffer.byteLength(trimmed, "utf8") > budget && trimmed.length > 0) {
+    trimmed = trimmed.slice(0, -64);
+  }
+  return trimmed + marker + suffix;
+}
+
 async function defaultAgyRunner(record, { sink } = {}) {
   const emit = sink ?? ((t) => process.stdout.write(t));
   const { meta } = record;
@@ -210,12 +239,18 @@ async function defaultAgyRunner(record, { sink } = {}) {
 
   const outDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-"));
   const outFile = path.join(outDir, "response.md");
-  const augmented =
-    `${prompt}\n\n---\n` +
+  const suffix =
+    `\n\n---\n` +
     `OUTPUT INSTRUCTION (required): Use the write_file tool to write your ` +
     `COMPLETE response to this exact path:\n${outFile}\n` +
     `Do NOT print the answer to chat — that path is your only deliverable. ` +
     `After writing the file, stop.`;
+  // agy --print takes the whole prompt as a single argv entry, so the
+  // total must stay under the OS command-line limit (~32 KB on Windows)
+  // or spawn fails with ENAMETOOLONG. Truncate the body if needed while
+  // always preserving the write_file suffix (otherwise agy wouldn't know
+  // where to put the answer).
+  const augmented = capPromptForArgv(prompt, suffix);
 
   // Where agy actually runs / is allowed to write. Defaults to the
   // workspace; worktree isolation points it at a throwaway copy so the

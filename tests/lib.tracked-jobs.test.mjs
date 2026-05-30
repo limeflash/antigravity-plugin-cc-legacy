@@ -158,3 +158,20 @@ describe("waitForJob", () => {
     expect(r?.status).toBe("running");
   });
 });
+
+import { capPromptForArgv } from "../plugins/agy/scripts/lib/tracked-jobs.mjs";
+
+describe("capPromptForArgv", () => {
+  it("passes a small prompt through unchanged (body + suffix)", () => {
+    expect(capPromptForArgv("hello", "\nSUFFIX")).toBe("hello\nSUFFIX");
+  });
+
+  it("truncates an oversized body but keeps the suffix intact", () => {
+    const body = "X".repeat(50000);
+    const suffix = "\n---WRITE_FILE_INSTRUCTION---";
+    const out = capPromptForArgv(body, suffix, 28000);
+    expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(28000);
+    expect(out.endsWith(suffix)).toBe(true);
+    expect(out).toContain("truncated");
+  });
+});
