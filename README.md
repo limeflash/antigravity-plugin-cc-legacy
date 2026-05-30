@@ -7,9 +7,15 @@
 > toward feature parity with
 > [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc):
 > background job control (`/agy:status`, `/agy:result`, `/agy:cancel`),
-> branch-base code review (`--base <ref>`), adversarial review, optional
-> stop-gate review hook, and a CI-tested wrapper. See [NOTICE](./NOTICE)
-> and [CHANGELOG.md](./CHANGELOG.md) for what changed.
+> branch-base code review (`--base <ref>`), adversarial review,
+> rescue safety rails (`--isolate`), and a CI-tested wrapper. See
+> [NOTICE](./NOTICE) and [CHANGELOG.md](./CHANGELOG.md) for what changed.
+>
+> **Status (v0.5.7):** every command validated end-to-end against a
+> real `agy` 1.0.3 install; 189 unit tests + CI (shellcheck, bats,
+> vitest on Node 18/20/22). The review path was hardened by running
+> the plugin's own `/agy:review` on its own code across four rounds —
+> 17 real issues found and fixed (see [CHANGELOG.md](./CHANGELOG.md)).
 
 Use Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from
 inside Claude Code. Delegate tasks to the `agy:runner` subagent, run quick
@@ -37,7 +43,9 @@ have.
   `generate_image` tool (Imagen under the hood). Optional `--name` and
   `--output`.
 - **`/agy:review [focus]`** — ask Antigravity to review your current
-  `git diff`. Aborts with a warning if the diff appears to contain
+  `git diff`. Sends an expanded diff (`-U25`) plus the full content of
+  small changed files so `agy` sees imports/guards and doesn't raise
+  context-blind false positives. Aborts if the diff appears to contain
   secrets (override via `AGY_REVIEW_ALLOW_SECRETS=1`).
 - **`/agy:help`** — show all commands, supported `--model` aliases, and
   canonical model names.
@@ -207,17 +215,40 @@ you want the wrapper to copy it next to your project.
 Under the hood, the plugin is a thin wrapper around your local `agy` install:
 
 ```
-Claude Code  →  /agy:*  →  agy:runner subagent  →  agy-run.sh  →  agy -p "..."
+Claude Code  →  /agy:*  →  agy-run.sh (Bash)        →  agy --print "<prompt>"
+                        ↘  agy-companion.mjs (Node)  →  agy --print "<prompt>"
 ```
 
 - The plugin does **not** ship its own Antigravity runtime — it uses your
   local `agy` binary, your local auth, and your local config.
-- The wrapper script
+- The Bash wrapper
   ([`plugins/agy/scripts/agy-run.sh`](./plugins/agy/scripts/agy-run.sh))
-  handles binary discovery, auth detection, and exit codes.
-- The `agy:runner` subagent is a *forwarder*: it invokes the wrapper exactly
-  once per request and returns Antigravity's output verbatim. No
-  reinterpretation.
+  handles the synchronous commands; the Node companion
+  ([`agy-companion.mjs`](./plugins/agy/scripts/agy-companion.mjs))
+  handles the stateful ones (background jobs, branch review).
+
+### Why output goes through `write_file` (agy issue #76)
+
+On `agy` 1.0.3, `agy --print` flushes **zero bytes to a non-TTY
+stdout** — the response is generated (`Drip stopped: length=N` in the
+log) but the "drip" writer only targets a real terminal. Since the
+plugin always runs `agy` from a subprocess, capturing stdout returns
+nothing. (`agy --print` also *hangs* on a non-TTY stdin that never
+EOFs.)
+
+The only reliable headless path is to instruct `agy` **in the prompt**
+to write its answer to a temp file via the `write_file` tool, then read
+that file back. `write_file` needs auto-approval, so the plugin passes
+`--dangerously-skip-permissions` — but scopes the blast radius:
+
+- read-only commands (`/agy:ask`, `/agy:review`, `/agy:adversarial-review`)
+  run with `--sandbox` and `--add-dir` limited to a throwaway temp dir;
+- `/agy:rescue` (a delegated coding task) gets repo write access by
+  design, mitigated by the clean-tree guard, the post-run diff, and
+  `--isolate` worktree mode.
+
+If/when Google fixes #76 so `--print` flushes to a pipe, the plugin can
+drop the `write_file` dance and the auto-approve requirement.
 
 ## Configuration
 
@@ -270,23 +301,25 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
   - [x] CI: shellcheck + bats unit tests on every PR.
   - [x] Community files: `SECURITY.md`, `CONTRIBUTING.md`, issue/PR
         templates, dependabot.
-- **Phase 2 — codex-plugin-cc parity** (mostly done in 0.5.0)
+- **Phase 2 — codex-plugin-cc parity** ✅ (0.5.x)
   - [x] Node.js companion scaffold + state machine
         (`lib/state.mjs`, `lib/job-control.mjs`,
         `lib/tracked-jobs.mjs`, …).
   - [x] `/agy:rescue` with `--background`, `--wait`, `--resume`,
-        `--fresh` and PID-file-based job control.
+        `--fresh` and job control.
   - [x] `/agy:status`, `/agy:result`, `/agy:cancel`.
-  - [x] `/agy:review --base <ref>` for branch review (with
-        merge-base resolution so unrelated base-branch changes don't
-        leak into the diff).
-  - [x] `/agy:adversarial-review` (challenge-mode review with
-        ship/change/rethink verdict).
-  - [x] CI: vitest matrix on Node 18.18 / 20 / 22.
-  - [ ] Optional Stop-gate review hook (deferred to 0.6.0 — needs
-        a careful safety review before shipping; the hook can
-        block Claude responses).
-- **Phase 3 — Antigravity-specific**
+  - [x] `/agy:review --base <ref>` for branch review (merge-base
+        resolution + expanded `-U25` + full-file context).
+  - [x] `/agy:adversarial-review` (challenge-mode review).
+  - [x] `agy` #76 write_file workaround + non-TTY stdin-hang fix +
+        prompt-size cap — validated against real `agy` 1.0.3.
+  - [x] `/agy:rescue` safety rails: clean-tree guard, post-run diff,
+        `--isolate` worktree mode.
+  - [x] Secret-scan guardrails (Bash + companion parity).
+  - [x] CI: shellcheck + bats + vitest matrix (Node 18.18 / 20 / 22).
+  - [ ] Optional Stop-gate review hook (deferred — the hook can block
+        Claude responses; wants a careful safety review first).
+- **Phase 3 — Antigravity-specific** (not started)
   - [ ] Safe `/agy:scrape`, `/agy:doc-to-md` (no auto-approve, deny-list
         on input paths/URLs).
   - [ ] Windows-native (PowerShell) port.
@@ -299,9 +332,17 @@ This fork extends
 [`simplybychris/antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc),
 which is itself inspired by
 [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc).
-The goal here is to keep simplybychris's security-conscious defaults (no
-`--dangerously-skip-permissions`, no global `--add-dir <CWD>`) while
-reaching the codex-plugin-cc feature surface.
+
+The goal is to keep the security posture as tight as `agy` allows while
+reaching the codex-plugin-cc feature surface. One unavoidable
+compromise: `agy` 1.0.3 returns no output from `--print` in a
+non-TTY context (issue #76), so getting any answer headless requires
+the `write_file` workaround and therefore `--dangerously-skip-permissions`
+(see [How it works](#why-output-goes-through-write_file-agy-issue-76)).
+Rather than auto-approve everything globally, the fork scopes it:
+`--sandbox` + temp-only write access for read-only commands, and
+worktree isolation (`--isolate`) for the one write-capable command
+(`/agy:rescue`).
 
 ## License
 
