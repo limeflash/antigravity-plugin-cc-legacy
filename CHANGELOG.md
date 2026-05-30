@@ -13,6 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.2] - 2026-05-30 (limeflash fork)
+
+Completes the live-agy validation pass: every `/agy:*` command now
+verified working against a real `agy` 1.0.3 install, with two more
+fixes the validation surfaced.
+
+### Fixed
+- **`/agy:image` was doubly broken** against real agy: it hung on the
+  non-TTY stdin and relied on an `IMAGE_PATH:` stdout marker that #76
+  swallowed. Rewritten to the write_file marker pattern — agy
+  generates the image, then write_file's the saved image's absolute
+  path to a temp marker the wrapper reads back (then validates against
+  the artifacts-dir allowlist and copies to `--output`). Verified: a
+  real 1024×1024 image is produced and copied.
+- **Companion job success no longer keys on agy's exit code.** agy
+  `--print` was observed exiting non-zero even after writing a
+  complete answer (e.g. `/agy:review` reported the bug correctly but
+  the job showed `failed`). `defaultAgyRunner` now treats a non-empty
+  response file as success, so `/agy:status` / `/agy:result` report
+  `completed` accurately.
+
+### Validated live (agy 1.0.3, Google AI Pro)
+`/agy:ask`, `/agy:ask --model`, `/agy:review`, `/agy:review --base`,
+`/agy:adversarial-review`, `/agy:image`, `/agy:rescue` (fg),
+`/agy:rescue --background` → `/agy:status` → `/agy:result`,
+`/agy:cancel`, `/agy:setup` — all confirmed working end-to-end.
+
 ## [0.5.1] - 2026-05-30 (limeflash fork)
 
 Hotfix: make the plugin actually return agy's output when driven by

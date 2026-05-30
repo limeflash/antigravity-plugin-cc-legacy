@@ -235,10 +235,16 @@ async function defaultAgyRunner(record, { sink } = {}) {
   });
 
   // Read agy's written response and emit it so it lands in the job log.
+  // The presence of a non-empty response file is the real success
+  // signal — agy's own exit code is unreliable in --print mode (it has
+  // been observed to exit non-zero even after writing a complete
+  // answer). So we key success on the file, not on `code`.
+  let produced = false;
   try {
     const content = await fsp.readFile(outFile, "utf8");
     if (content.length > 0) {
       emit(content.endsWith("\n") ? content : content + "\n");
+      produced = true;
     } else {
       emit(`[agy-job ${record.id}] agy wrote an empty response file (issue #76 workaround produced nothing).\n`);
     }
@@ -247,7 +253,9 @@ async function defaultAgyRunner(record, { sink } = {}) {
   } finally {
     await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
   }
-  return code;
+  // 0 when we got a usable response; otherwise surface agy's code (or 1).
+  if (produced) return 0;
+  return code === 0 ? 1 : code;
 }
 
 /**

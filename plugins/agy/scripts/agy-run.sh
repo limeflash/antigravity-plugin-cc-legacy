@@ -578,62 +578,71 @@ cmd_image() {
   local agy_path
   agy_path="$(require_ready)"
 
+  # agy issue #76 workaround. The old design asked agy to end its reply
+  # with an `IMAGE_PATH:` line, but agy --print flushes nothing to a
+  # non-TTY stdout (so the marker never arrived) and hangs on a non-TTY
+  # stdin. Instead: agy generates the image, then write_file's the
+  # saved image's absolute path into a marker file we read back.
+  local outdir
+  outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir" >&2; return 1; }
+  local marker="$outdir/image-path.txt"
+  local marker_path target_dir
+  if command -v cygpath >/dev/null 2>&1; then
+    marker_path="$(cygpath -w "$marker")"
+    target_dir="$(cygpath -w "$outdir")"
+  else
+    marker_path="$marker"
+    target_dir="$outdir"
+  fi
   local name_clause=""
   if [ -n "$name" ]; then
-    name_clause=" Save the image with name \"${name}\"."
+    name_clause=" Save the image with the name \"${name}\"."
   fi
   local prompt
-  prompt="Use your built-in generate_image tool to create the following image. Description: ${description}.${name_clause}
+  prompt="$(printf 'Use your built-in generate_image tool to create this image: %s.%s\n\nAfter the image is saved, use the write_file tool to write ONLY the absolute filesystem path of the saved image (a single line, no quotes, nothing else) to this exact path:\n%s\nDo not print anything to chat. The marker file is your only textual deliverable.' "$description" "$name_clause" "$marker_path")"
 
-After the tool returns, you MUST end your reply with a single line in this exact format (no quotes, no markdown, nothing after it):
-IMAGE_PATH: <absolute filesystem path to the saved image>
+  # stdin </dev/null avoids the hang; --sandbox + --add-dir <tmp> scope
+  # the auto-approved write_file to the throwaway temp dir only.
+  "$agy_path" --dangerously-skip-permissions --sandbox --add-dir "$target_dir" \
+    --print-timeout "${AGY_IMAGE_TIMEOUT:-8m0s}" --print "$prompt" \
+    </dev/null >/dev/null 2>&1 || true
 
-The IMAGE_PATH line is required — the calling wrapper parses it to locate the file."
-
-  local response rc
-  response="$("$agy_path" -p "$prompt" 2>&1)" || rc=$?
-  rc="${rc:-0}"
-  printf '%s\n' "$response"
-
-  local src
-  src="$(printf '%s' "$response" \
-    | sed -n 's/^[[:space:]]*IMAGE_PATH:[[:space:]]*//p' \
-    | tail -n1)"
-
-  # Fallback when the model skips the marker line.
-  if [ -z "$src" ] || [ ! -f "$src" ]; then
-    src="$(printf '%s' "$response" \
-      | grep -oE '/[^[:space:]]+\.(png|jpg|jpeg|webp)' \
-      | head -n1)"
+  local src=""
+  if [ -s "$marker" ]; then
+    src="$(grep -m1 -v '^[[:space:]]*$' "$marker" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    # agy may report a native Windows path; translate so [ -f ] works.
+    if command -v cygpath >/dev/null 2>&1 && printf '%s' "$src" | grep -q '^[A-Za-z]:[\\/]'; then
+      src="$(cygpath -u "$src" 2>/dev/null || printf '%s' "$src")"
+    fi
   fi
+  rm -rf "$outdir"
 
   if [ -n "$src" ] && [ -f "$src" ]; then
-    # Guardrail: refuse paths outside agy's artifacts dirs. Prevents a
-    # prompt-injected IMAGE_PATH (e.g. `/etc/passwd`) from being copied
-    # into the user's project via --output.
+    # Guardrail: refuse paths outside agy's artifacts dirs (prompt
+    # injection could otherwise make us copy an arbitrary host file).
     if ! _image_source_in_allowlist "$src"; then
       {
-        echo
         echo "[wrapper] error: refusing to use image source path outside agy's artifacts directory."
         echo "[wrapper]        path: $src"
         echo "[wrapper]        allowed prefixes: ~/.gemini/antigravity-cli/{brain,scratch,cache}/"
-        echo "[wrapper]        this can be caused by prompt injection in the model's reply;"
-        echo "[wrapper]        inspect agy's output above and re-run if it looks legitimate."
       } >&2
       return 66
     fi
-    echo
     echo "[wrapper] generated: $src"
     if [ -n "$output" ]; then
       cp "$src" "$output"
       echo "[wrapper] copied to: $output"
     fi
-  else
-    echo
-    echo "[wrapper] warning: agy did not include an IMAGE_PATH line and no image path was found in its reply." >&2
-    echo "[wrapper]          if --output was requested, the copy was skipped." >&2
+    return 0
   fi
-  return "$rc"
+
+  {
+    echo "[wrapper] error: agy did not produce a locatable image."
+    echo "[wrapper]        The marker file was empty or the path it named does not exist."
+    echo "[wrapper]        generate_image may have failed or write_file was declined; check"
+    echo "[wrapper]        ~/.gemini/antigravity-cli/log/ or run \`agy\` interactively."
+  } >&2
+  return 1
 }
 
 cmd_help() {
