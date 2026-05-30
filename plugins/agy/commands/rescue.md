@@ -1,6 +1,6 @@
 ---
-description: Delegate a task to agy with full job control (background, wait, resume, model, status/result/cancel). Phase-2 alternative to /agy:delegate.
-argument-hint: "[--background] [--wait] [--resume|--fresh] [--model <alias>] <task>"
+description: Delegate a task to agy with full job control + safety rails (isolate, clean-tree guard, post-run diff). Phase-2 alternative to /agy:delegate.
+argument-hint: "[--isolate] [--allow-dirty] [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>"
 allowed-tools: Bash(node:*)
 ---
 
@@ -77,15 +77,36 @@ passes the alias through to the wrapper's per-call patch of
 Always surface the job id to the user when in background mode so
 they can pass it to `/agy:status`, `/agy:result`, or `/agy:cancel`.
 
+## Safety: how rescue protects your repo
+
+`/agy:rescue` is a *delegated coding task*, so agy runs with
+`--dangerously-skip-permissions` and write access to the workspace —
+it can create/edit/delete files without prompting. Three rails keep
+that safe:
+
+1. **Clean-tree guard.** In a git repo, rescue **refuses to run on a
+   dirty working tree** (uncommitted changes), so you always have a
+   clean baseline to revert to. Commit/stash first, use `--isolate`,
+   or pass `--allow-dirty` to override.
+2. **Post-run diff.** After a non-isolated rescue, the companion
+   prints `git diff --stat` + any new files, so you see exactly what
+   agy changed before committing.
+3. **`--isolate` (strongest).** agy edits a throwaway `git worktree`
+   copy — **your real working tree is never touched**. The companion
+   captures the result as a patch under
+   `.agy-plugin/patches/<job>.patch` and prints `git apply` / discard
+   instructions. Foreground only (it shows you the patch). Requires a
+   git repo.
+
+**Recommend `--isolate` for anything non-trivial**, or for repos with
+work you can't afford to lose.
+
 ## Operating rules
 
-- The companion does **not** auto-approve agy's tool calls (no
-  `--dangerously-skip-permissions`). If `agy` decides it needs to
-  read or edit files, it will prompt — and in background mode that
-  prompt may stall the job until canceled.
-- The companion does **not** expand `--add-dir`. If the task
-  requires write access to the repo, the user should run /agy:ask
-  or invoke `agy` interactively instead.
+- `--isolate` overrides `--background` (it runs foreground to show you
+  the patch).
+- Non-isolated rescue on a non-git directory warns (no safety net) but
+  proceeds.
 - If the companion reports `cannot find the agy binary`, tell the
   user to run `/agy:setup`.
 - If the companion errors with exit 64 ("task description is

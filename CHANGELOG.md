@@ -13,6 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.3] - 2026-05-30 (limeflash fork)
+
+Adds safety rails to `/agy:rescue`, which runs agy with
+`--dangerously-skip-permissions` and repo write access by design (it's
+a delegated coding task). All three verified live against real agy
+1.0.3 — a `rescue --isolate` that adds a function leaves the real tree
+untouched and emits a reviewable patch.
+
+### Added
+- **`--isolate` (worktree isolation).** agy edits a throwaway
+  `git worktree` copy at HEAD; your real working tree is never
+  touched. The companion captures the result as a patch under
+  `.agy-plugin/patches/<job>.patch` and prints `git apply` / discard
+  instructions. Foreground-only; requires a git repo.
+- **Clean-tree guard.** A non-isolated `rescue` now refuses to run on
+  a dirty working tree (so you always have a clean revert point).
+  Override with `--allow-dirty`, or use `--isolate`. Non-git
+  directories warn instead (no safety net) and proceed.
+- **Post-run diff.** After a non-isolated `rescue`, the companion
+  prints `git diff --stat` + any new untracked files, so you review
+  what agy changed before committing.
+- New `lib/git.mjs` helpers: `isGitRepo`, `isWorkingTreeClean`,
+  `changeSummary`, `addWorktree`, `removeWorktree`,
+  `captureWorktreePatch` (+ 6 unit tests). Job records gain
+  `meta.executionRoot` so agy can run in the worktree while job state
+  stays in the real repo. 164 vitest pass.
+
 ## [0.5.2] - 2026-05-30 (limeflash fork)
 
 Completes the live-agy validation pass: every `/agy:*` command now

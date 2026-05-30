@@ -11,6 +11,12 @@ import {
   mergeBase,
   workingTreeDiff,
   branchDiff,
+  isGitRepo,
+  isWorkingTreeClean,
+  changeSummary,
+  addWorktree,
+  removeWorktree,
+  captureWorktreePatch,
 } from "../plugins/agy/scripts/lib/git.mjs";
 
 let repo;
@@ -123,5 +129,65 @@ describe("branchDiff", () => {
 
   it("throws on a base ref that doesn't resolve", async () => {
     await expect(branchDiff(repo, "nope-branch")).rejects.toThrow(/cannot resolve/);
+  });
+});
+
+describe("safety helpers (rescue guards + isolation)", () => {
+  it("isGitRepo true inside repo, false outside", async () => {
+    expect(await isGitRepo(repo)).toBe(true);
+    const outside = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-nogit-"));
+    try {
+      expect(await isGitRepo(outside)).toBe(false);
+    } finally {
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("isWorkingTreeClean: true on a fresh commit, false after an edit", async () => {
+    expect(await isWorkingTreeClean(repo)).toBe(true);
+    await fsp.writeFile(path.join(repo, "README.md"), "v1\ndirty\n");
+    expect(await isWorkingTreeClean(repo)).toBe(false);
+  });
+
+  it("isWorkingTreeClean: false when there's an untracked file", async () => {
+    await fsp.writeFile(path.join(repo, "new.txt"), "hi\n");
+    expect(await isWorkingTreeClean(repo)).toBe(false);
+  });
+
+  it("changeSummary reports edited + untracked files", async () => {
+    await fsp.writeFile(path.join(repo, "README.md"), "v1\nchanged\n");
+    await fsp.writeFile(path.join(repo, "brand-new.txt"), "x\n");
+    const s = await changeSummary(repo);
+    expect(s).toContain("README.md");
+    expect(s).toMatch(/brand-new\.txt/);
+  });
+
+  it("changeSummary on a clean tree says no changes", async () => {
+    expect(await changeSummary(repo)).toMatch(/no changes/i);
+  });
+
+  it("worktree round-trip: add → edit isolated → capture patch → real tree untouched → remove", async () => {
+    const wtParent = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-wt-"));
+    const wtDir = path.join(wtParent, "wt");
+    try {
+      const added = await addWorktree(repo, wtDir);
+      expect(added.ok).toBe(true);
+
+      // Edit inside the worktree only.
+      await fsp.writeFile(path.join(wtDir, "README.md"), "v1\nfrom-worktree\n");
+      await fsp.writeFile(path.join(wtDir, "added-in-wt.txt"), "new\n");
+
+      const { stat, patch } = await captureWorktreePatch(wtDir);
+      expect(stat).toContain("README.md");
+      expect(patch).toContain("from-worktree");
+      expect(patch).toContain("added-in-wt.txt");
+
+      // The REAL repo must be untouched by the worktree edits.
+      expect(await fsp.readFile(path.join(repo, "README.md"), "utf8")).toBe("v1\n");
+      await expect(fsp.access(path.join(repo, "added-in-wt.txt"))).rejects.toThrow();
+    } finally {
+      await removeWorktree(repo, wtDir);
+      await fsp.rm(wtParent, { recursive: true, force: true });
+    }
   });
 });

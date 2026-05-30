@@ -45,7 +45,14 @@ export async function startTrackedJob(workspaceRoot, partial) {
     model: partial.model,
     args: partial.args ?? [],
     background: partial.background ?? true,
-    meta: { prompt: partial.prompt, agyBin: partial.agyBin ?? null },
+    meta: {
+      prompt: partial.prompt,
+      agyBin: partial.agyBin ?? null,
+      // When set (worktree isolation), agy runs in / writes to this
+      // directory instead of the real workspaceRoot. Job state still
+      // lives under workspaceRoot.
+      executionRoot: partial.executionRoot ?? null,
+    },
   });
 
   if (!partial.background) {
@@ -210,11 +217,15 @@ async function defaultAgyRunner(record, { sink } = {}) {
     `Do NOT print the answer to chat — that path is your only deliverable. ` +
     `After writing the file, stop.`;
 
+  // Where agy actually runs / is allowed to write. Defaults to the
+  // workspace; worktree isolation points it at a throwaway copy so the
+  // user's real tree is never touched.
+  const execRoot = record.meta?.executionRoot ?? record.workspaceRoot;
   const writeCapable = record.kind === "rescue";
   const args = ["--dangerously-skip-permissions"];
   if (!writeCapable) args.push("--sandbox");
   args.push("--add-dir", outDir);
-  if (writeCapable) args.push("--add-dir", record.workspaceRoot);
+  if (writeCapable) args.push("--add-dir", execRoot);
   args.push(...(record.args ?? []));
   args.push("--print", augmented);
 
@@ -224,7 +235,7 @@ async function defaultAgyRunner(record, { sink } = {}) {
       // ignored because #76 leaves it empty; stderr piped so real agy
       // errors still surface in the log.
       stdio: ["ignore", "ignore", "pipe"],
-      cwd: record.workspaceRoot,
+      cwd: execRoot,
     });
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {

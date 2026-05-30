@@ -12,6 +12,7 @@
 
 import process from "node:process";
 import path from "node:path";
+import os from "node:os";
 import { promises as fsp } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -36,13 +37,22 @@ import {
   renderCancelReport,
 } from "./lib/render.mjs";
 import { findAgyBinary } from "./lib/agy.mjs";
-import { workingTreeDiff, branchDiff } from "./lib/git.mjs";
+import {
+  workingTreeDiff,
+  branchDiff,
+  isGitRepo,
+  isWorkingTreeClean,
+  changeSummary,
+  addWorktree,
+  removeWorktree,
+  captureWorktreePatch,
+} from "./lib/git.mjs";
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 
-const VERSION = "0.5.2";
+const VERSION = "0.5.3";
 
 const RESCUE_SCHEMA = {
-  boolean: ["background", "wait", "resume", "fresh"],
+  boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
   value: ["model", "base"],
 };
 
@@ -60,9 +70,10 @@ function printUsage(stream = process.stdout) {
       "  node agy-companion.mjs <subcommand> [args...]",
       "",
       "Subcommands:",
-      "  rescue [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>",
-      "                       Delegate a task to agy. --background returns a job id;",
-      "                       --wait blocks until the job ends (or 10 min default).",
+      "  rescue [--isolate] [--allow-dirty] [--background] [--wait] [--resume|--fresh] [--model <a>] <task>",
+      "                       Delegate a task to agy (it can edit files). --isolate edits a",
+      "                       throwaway git worktree and shows a patch (your tree untouched);",
+      "                       otherwise it refuses on a dirty tree and prints a diff after.",
       "  status [task-id]     Show a single job, or the recent 10 if id omitted.",
       "  result [task-id]     Print the captured output of a (usually completed) job.",
       "  cancel [task-id]     Send SIGTERM to a running job; SIGKILL after a grace.",
@@ -128,10 +139,108 @@ async function cmdRescue(argv) {
 
   const background = parsed.flags.background;
   const wait = parsed.flags.wait;
+  const isolate = parsed.flags.isolate;
+  const allowDirty = parsed.flags["allow-dirty"];
   // Forward unknown flags + values back as agy-native args (e.g.
   // --sandbox, --print-timeout 20m).
   const extra = [...parsed.extra];
   if (parsed.flags.resume) extra.push("--continue");
+
+  // -------------------------------------------------------------------
+  // Worktree isolation: agy edits a throwaway copy of the repo, never
+  // the user's real working tree. We then show the diff as a patch the
+  // user can apply or discard. Strongest safety mode.
+  // -------------------------------------------------------------------
+  if (isolate) {
+    if (!(await isGitRepo(workspaceRoot))) {
+      process.stderr.write(
+        "rescue --isolate: requires a git repo (worktree isolation needs git).\n",
+      );
+      process.exit(1);
+    }
+    if (background) {
+      process.stdout.write(
+        "[note] --isolate runs in the foreground so it can show you the patch; ignoring --background.\n",
+      );
+    }
+    const wtParent = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-isolate-"));
+    const wtDir = path.join(wtParent, "wt");
+    const added = await addWorktree(workspaceRoot, wtDir);
+    if (!added.ok) {
+      process.stderr.write(`rescue --isolate: could not create worktree: ${added.error}\n`);
+      await fsp.rm(wtParent, { recursive: true, force: true }).catch(() => {});
+      process.exit(1);
+    }
+    let finalStatus = "failed";
+    try {
+      const record = await startTrackedJob(workspaceRoot, {
+        kind: "rescue",
+        task,
+        model: parsed.values.model ?? null,
+        args: extra,
+        background: false,
+        prompt: task,
+        agyBin,
+        executionRoot: wtDir, // agy runs in / writes to the worktree
+      });
+      finalStatus = await runJobWorker(workspaceRoot, record.id, {
+        teeLogFile: jobLogPath(workspaceRoot, record.id),
+      });
+      const { stat, patch } = await captureWorktreePatch(wtDir);
+      process.stdout.write(
+        "\n=== isolated changes (your working tree was NOT touched) ===\n",
+      );
+      if (stat && patch.trim()) {
+        process.stdout.write(stat + "\n");
+        const patchDir = path.join(workspaceRoot, ".agy-plugin", "patches");
+        await fsp.mkdir(patchDir, { recursive: true });
+        const patchFile = path.join(patchDir, `${record.id}.patch`);
+        await fsp.writeFile(patchFile, patch);
+        const rel = path.relative(workspaceRoot, patchFile) || patchFile;
+        process.stdout.write(
+          [
+            "",
+            `Review the patch:  ${rel}`,
+            `Apply it:          git apply "${rel}"`,
+            `Discard it:        rm "${rel}"   (your tree is already untouched)`,
+            "",
+          ].join("\n"),
+        );
+      } else {
+        process.stdout.write("(agy made no file changes.)\n");
+      }
+    } finally {
+      await removeWorktree(workspaceRoot, wtDir);
+      await fsp.rm(wtParent, { recursive: true, force: true }).catch(() => {});
+    }
+    process.exit(finalStatus === "completed" ? 0 : 1);
+  }
+
+  // -------------------------------------------------------------------
+  // Non-isolated: agy edits the real working tree in place. Guard with
+  // a clean-tree check so there's always a revertable baseline.
+  // -------------------------------------------------------------------
+  const inGitRepo = await isGitRepo(workspaceRoot);
+  if (inGitRepo) {
+    if (!(await isWorkingTreeClean(workspaceRoot)) && !allowDirty) {
+      process.stderr.write(
+        [
+          "rescue: refusing to run on a dirty working tree.",
+          "        agy edits files in place with auto-approval, so a clean git",
+          "        baseline is your only easy undo. Choose one:",
+          "          - commit or stash your changes first, or",
+          "          - run with --isolate (agy edits a throwaway worktree, you get a patch), or",
+          "          - pass --allow-dirty to override (you accept the risk).",
+          "",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
+  } else {
+    process.stderr.write(
+      "[warn] not a git repo — no clean-tree safety net; agy will edit files in place with auto-approval.\n",
+    );
+  }
 
   const record = await startTrackedJob(workspaceRoot, {
     kind: "rescue",
@@ -146,11 +255,14 @@ async function cmdRescue(argv) {
   if (!background) {
     // Foreground: run agy synchronously in-process. Pass teeLogFile so
     // the worker both shows output live AND persists it to the job log,
-    // so a follow-up /agy:result <id> still works. (No reReadAndPrintLog
-    // afterward — that would double-print what the tee already showed.)
+    // so a follow-up /agy:result <id> still works.
     const finalStatus = await runJobWorker(workspaceRoot, record.id, {
       teeLogFile: jobLogPath(workspaceRoot, record.id),
     });
+    if (inGitRepo) {
+      process.stdout.write("\n=== changes agy made (review before committing) ===\n");
+      process.stdout.write((await changeSummary(workspaceRoot)) + "\n");
+    }
     process.exit(
       finalStatus === "completed" || finalStatus === "canceled" ? 0 : 1,
     );
@@ -170,6 +282,10 @@ async function cmdRescue(argv) {
       process.exit(1);
     }
     await reReadAndPrintLog(workspaceRoot, record.id);
+    if (inGitRepo) {
+      process.stdout.write("\n=== changes agy made (review before committing) ===\n");
+      process.stdout.write((await changeSummary(workspaceRoot)) + "\n");
+    }
     process.stdout.write(`\nJob ${record.id} ended with status: ${final.status}\n`);
     process.exit(final.status === "completed" ? 0 : 1);
   }
@@ -180,6 +296,7 @@ async function cmdRescue(argv) {
       `Check progress: /agy:status ${record.id}`,
       `Read output:    /agy:result ${record.id}`,
       `Cancel:         /agy:cancel ${record.id}`,
+      `When it finishes, run \`git diff\` to review what agy changed.`,
       "",
     ].join("\n"),
   );

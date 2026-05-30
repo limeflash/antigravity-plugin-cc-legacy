@@ -132,3 +132,83 @@ async function diffFiles(root, rangeArgs) {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+// --------------------------------------------------------------------------
+// Safety helpers for /agy:rescue (clean-tree guard + worktree isolation).
+// --------------------------------------------------------------------------
+
+/** True if `cwd` is inside a git repo. */
+export async function isGitRepo(cwd) {
+  return (await gitRoot(cwd)) !== null;
+}
+
+/**
+ * True if the working tree has no uncommitted changes (staged,
+ * unstaged, or untracked). Used to guarantee a clean revert point
+ * before a non-isolated rescue edits files in place.
+ */
+export async function isWorkingTreeClean(cwd) {
+  const r = await runCaptured("git", ["-C", cwd, "status", "--porcelain"], { cwd });
+  if (r.exitCode !== 0) return false;
+  return r.stdout.trim() === "";
+}
+
+/**
+ * `git diff --stat HEAD` + untracked file list, for the post-rescue
+ * "here's what agy changed" summary. Returns a printable string.
+ */
+export async function changeSummary(cwd) {
+  const stat = await runCaptured("git", ["-C", cwd, "diff", "--stat", "HEAD"], { cwd });
+  const untracked = await runCaptured(
+    "git",
+    ["-C", cwd, "ls-files", "--others", "--exclude-standard"],
+    { cwd },
+  );
+  const lines = [];
+  const statText = (stat.stdout || "").trim();
+  if (statText) lines.push(statText);
+  const newFiles = (untracked.stdout || "")
+    .split("\n").map((s) => s.trim()).filter(Boolean);
+  if (newFiles.length) {
+    lines.push("new (untracked) files:");
+    lines.push(...newFiles.map((f) => `  + ${f}`));
+  }
+  return lines.length ? lines.join("\n") : "(no changes detected)";
+}
+
+/**
+ * Create a detached worktree of `repoRoot` at HEAD under `dir`.
+ * Returns true on success. The worktree shares .git but has its own
+ * working directory, so an agent can edit it freely without touching
+ * the user's real working tree.
+ */
+export async function addWorktree(repoRoot, dir) {
+  const r = await runCaptured(
+    "git",
+    ["-C", repoRoot, "worktree", "add", "--detach", dir, "HEAD"],
+    { cwd: repoRoot },
+  );
+  return r.exitCode === 0 ? { ok: true } : { ok: false, error: r.stderr.trim() || r.stdout.trim() };
+}
+
+/** Remove a worktree created by addWorktree. Best-effort. */
+export async function removeWorktree(repoRoot, dir) {
+  await runCaptured("git", ["-C", repoRoot, "worktree", "remove", "--force", dir], { cwd: repoRoot });
+}
+
+/**
+ * After an isolated rescue, capture everything the agent changed in
+ * the worktree as a single patch (tracked edits + new files), plus a
+ * --stat summary. Stages all changes first so untracked files are
+ * included in the diff. Returns { stat, patch } (both strings).
+ */
+export async function captureWorktreePatch(worktreeDir) {
+  await runCaptured("git", ["-C", worktreeDir, "add", "-A"], { cwd: worktreeDir });
+  const stat = await runCaptured(
+    "git", ["-C", worktreeDir, "diff", "--cached", "--stat", "HEAD"], { cwd: worktreeDir },
+  );
+  const patch = await runCaptured(
+    "git", ["-C", worktreeDir, "diff", "--cached", "HEAD"], { cwd: worktreeDir },
+  );
+  return { stat: (stat.stdout || "").trim(), patch: patch.stdout || "" };
+}

@@ -52,10 +52,15 @@ Stateful workflows with persistent job records under
 adapted for `agy`. Node.js is **only** needed if you use these
 commands; the Bash wrapper above keeps working without it.
 
-- **`/agy:rescue [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>`**
-  — like `/agy:delegate`, but with our own job control. Foreground by
-  default; `--background` returns a job id you can check on later;
-  `--background --wait` blocks here until the job ends.
+- **`/agy:rescue [--isolate] [--allow-dirty] [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>`**
+  — like `/agy:delegate`, but with our own job control **and safety
+  rails**. agy can edit files (it runs with auto-approval by design),
+  so: a non-isolated rescue **refuses to run on a dirty git tree**
+  (override with `--allow-dirty`) and **prints a `git diff --stat`
+  afterward**; **`--isolate`** runs agy in a throwaway `git worktree`
+  so your real tree is never touched and you get a reviewable patch
+  under `.agy-plugin/patches/`. Foreground by default; `--background`
+  returns a job id; `--background --wait` blocks until done.
 - **`/agy:review --base <ref> [--background] [--wait] [--model <alias>] [focus]`**
   — branch-vs-base code review. Computes the merge-base of HEAD and
   the base ref so unrelated changes on the base branch are excluded.
