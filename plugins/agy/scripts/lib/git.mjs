@@ -273,8 +273,24 @@ export async function stageReviewMaterials(stageDir, root, files, diff, opts = {
   } catch {
     realRoot = root;
   }
+  const filesRootResolved = path.resolve(filesRoot);
   for (const rel of files ?? []) {
-    const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    // git diff --name-only yields repo-relative paths, but be defensive:
+    // an absolute path or one with `..` would let path.join escape the
+    // stage dir (or crash with EINVAL on Windows for "C:\..."). Skip it.
+    if (path.isAbsolute(rel)) {
+      omitted.push({ path: rel, reason: "absolute path (skipped)" });
+      continue;
+    }
+    const dest = path.join(filesRoot, rel);
+    if (
+      path.resolve(dest) !== filesRootResolved &&
+      !path.resolve(dest).startsWith(filesRootResolved + path.sep)
+    ) {
+      omitted.push({ path: rel, reason: "path escapes stage dir (skipped)" });
+      continue;
+    }
+    const abs = path.join(root, rel);
     let st;
     try {
       st = await fsp.lstat(abs);
@@ -317,7 +333,7 @@ export async function stageReviewMaterials(stageDir, root, files, diff, opts = {
       omitted.push({ path: rel, reason: "binary" });
       continue;
     }
-    const dest = path.join(filesRoot, rel);
+    // `dest` was computed and containment-checked at the top of the loop.
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     await fsp.writeFile(dest, content);
     staged.push(rel);

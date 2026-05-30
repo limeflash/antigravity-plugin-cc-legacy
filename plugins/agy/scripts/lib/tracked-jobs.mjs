@@ -162,6 +162,16 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
       ? "completed"
       : "failed";
 
+  // Don't clobber a `canceled` status: if /agy:cancel terminated us and
+  // already marked the record canceled, our death throes here must not
+  // overwrite it back to failed (status race fixed).
+  const latest = await readJob(workspaceRoot, jobId);
+  if (latest && latest.status === "canceled") {
+    sink(`[agy-job ${jobId}] (job was canceled; leaving status=canceled)\n`);
+    if (teeStream) await new Promise((resolve) => teeStream.end(resolve));
+    return "canceled";
+  }
+
   await updateJob(workspaceRoot, jobId, {
     status: finalStatus,
     exitCode: exitCode,
@@ -311,11 +321,13 @@ async function defaultAgyRunner(record, { sink } = {}) {
   } catch {
     emit(`[agy-job ${record.id}] agy produced no response file — it may have timed out or declined write_file.\n`);
   } finally {
-    // Only clean up the dir WE created. When meta.stageDir is set the
-    // caller (runReviewCommand) owns and removes it.
-    if (!stageDir) {
-      await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
-    }
+    // Always clean up the work dir — it's the response temp (rescue/ask)
+    // or the review stage dir (meta.stageDir). The worker is the last
+    // reader of response.md, so cleaning here also closes the
+    // background-review temp leak (the detached worker, not the
+    // already-exited parent, removes it). runReviewCommand's own
+    // cleanup is then just an idempotent belt-and-suspenders.
+    await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
   }
   // 0 when we got a usable response; otherwise surface agy's code (or 1).
   if (produced) return 0;

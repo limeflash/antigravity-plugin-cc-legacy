@@ -13,6 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.9] - 2026-05-30 (limeflash fork)
+
+Fifth dogfood round: an adversarial self-review of the 0.5.8 Design A+
+code. Fixed the three legitimate findings.
+
+### Fixed
+- **Background review temp-dir leak.** A `--background` review's stage
+  dir was never removed (the parent exited; the detached worker skipped
+  cleanup because the parent "owned" it). The worker now always removes
+  its work dir after reading the response, so background reviews no
+  longer accumulate temp directories. Verified: a foreground review
+  leaves zero `agy-review-*` dirs behind.
+- **Cancel status race.** A worker dying just after `/agy:cancel` marked
+  the record `canceled` could overwrite it back to `failed`.
+  `runJobWorker` now re-reads the record before its final update and
+  leaves a `canceled` status intact.
+- **Stage-dir path traversal.** `stageReviewMaterials` now rejects an
+  absolute or `..`-escaping changed-file path (would crash with EINVAL
+  on Windows for `C:\...`, or write outside the stage dir) — it
+  verifies the destination stays under the stage `files/` root.
+
+### Considered and not changed
+- Review stages only the *changed* files, so agy can't trace imports
+  into *unchanged* files — accepted tradeoff (the worktree-for-read
+  alternative reintroduces the `.git` absolute-path leak we rejected for
+  the read-only guarantee). The prompt tells agy to mark cross-context
+  concerns `[UNVERIFIED]`.
+- Orphaned `agy` child + no-commits-repo edge: low-impact, noted.
+
+188 vitest pass.
+
 ## [0.5.8] - 2026-05-30 (limeflash fork)
 
 Design A+ : the companion review path now stages the diff + full files

@@ -175,3 +175,20 @@ describe("capPromptForArgv", () => {
     expect(out).toContain("truncated");
   });
 });
+
+describe("runJobWorker — does not clobber a canceled status", () => {
+  it("keeps status=canceled when the job is canceled mid-run", async () => {
+    const j = await createJob(workspaceRoot, { kind: "rescue", task: "x", meta: { prompt: "p" } });
+    await updateJob(workspaceRoot, j.id, { status: "running", pid: process.pid });
+    const status = await runJobWorker(workspaceRoot, j.id, {
+      runner: async () => {
+        // Simulate /agy:cancel marking it canceled while agy runs.
+        await updateJob(workspaceRoot, j.id, { status: "canceled" });
+        return 0;
+      },
+    });
+    expect(status).toBe("canceled");
+    const after = await readJob(workspaceRoot, j.id);
+    expect(after.status).toBe("canceled");
+  });
+});

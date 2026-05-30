@@ -326,3 +326,21 @@ describe("stageReviewMaterials (Design A+)", () => {
     }
   });
 });
+
+describe("stageReviewMaterials — dest path traversal guards", () => {
+  it("skips absolute and ..-escaping relpaths instead of writing/crashing", async () => {
+    const { stageReviewMaterials } = await import("../plugins/agy/scripts/lib/git.mjs");
+    const stage = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-stage-"));
+    try {
+      const abs = process.platform === "win32" ? "C:/Windows/system32/x.txt" : "/etc/passwd";
+      const r = await stageReviewMaterials(stage, repo, [abs, "../../escape.txt"], "d");
+      expect(r.staged).toEqual([]);
+      const reasons = r.omitted.map((o) => o.reason).join("|");
+      expect(reasons).toMatch(/absolute path|escapes stage/);
+      // nothing leaked outside the stage dir
+      await expect(fsp.access(path.join(stage, "..", "escape.txt"))).rejects.toThrow();
+    } finally {
+      await fsp.rm(stage, { recursive: true, force: true });
+    }
+  });
+});
