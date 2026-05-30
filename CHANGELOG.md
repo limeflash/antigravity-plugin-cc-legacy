@@ -13,6 +13,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.1] - 2026-05-30 (limeflash fork)
+
+Hotfix: make the plugin actually return agy's output when driven by
+Claude Code. Validated end-to-end against a real `agy` 1.0.3 install
+(Google AI Pro, Gemini 3.5 Flash) — the 0.5.0 commands returned empty
+because of two agy `--print` behaviors in non-TTY contexts.
+
+### Fixed
+- **agy issue #76 (empty stdout in non-TTY).** `agy --print` generates
+  the response internally (`Drip stopped: length=N` in the log) but
+  flushes zero bytes to a piped stdout — so the plugin, which always
+  runs agy from a subprocess, captured nothing. Both the Bash wrapper
+  (`/agy:ask`, `/agy:review`) and the Node companion (`/agy:rescue`,
+  `/agy:review`, `/agy:adversarial-review`) now use the write_file
+  pattern: agy is told to write its full answer to a throwaway temp
+  file (auto-approved via `--dangerously-skip-permissions`, scoped by
+  `--sandbox` + `--add-dir <tmp>`), which the plugin then reads back.
+- **agy `--print` non-TTY stdin hang.** Without a closed stdin, agy
+  blocks forever and ignores `--print-timeout`. The wrapper now runs
+  agy with `</dev/null`; the companion uses `stdio: ignore` for stdin.
+- **`--model` no longer hard-fails.** agy 1.0.x keeps no top-level
+  `"model"` key in `settings.json` until you pick one in the TUI, so
+  the patch-and-restore path had nothing to patch and aborted the
+  whole command. It now warns once and uses the default model.
+- **Removed the `#!/usr/bin/env node` shebang** from
+  `agy-companion.mjs` (vite-node failed to parse it on import; the file
+  is always invoked as `node agy-companion.mjs`).
+
+### Notes
+- Getting output from agy 1.0.3 headless requires
+  `--dangerously-skip-permissions` (to auto-approve the write_file
+  tool). Blast radius is scoped: read-only commands run `--sandbox`
+  with write access limited to a temp dir; only `/agy:rescue` (a
+  delegated coding task by design) is granted repo write access.
+- This is an upstream agy limitation; if Google fixes #76 so
+  `--print` flushes to a pipe, the plugin can drop the write_file
+  dance and the auto-approve requirement.
+
 ## [0.5.0] - 2026-05-28 (limeflash fork)
 
 First release of the limeflash fork. Brings the plugin to ~80%
