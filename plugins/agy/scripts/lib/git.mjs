@@ -6,7 +6,26 @@
 // behavior for free.
 
 import path from "node:path";
+import { promises as fsp } from "node:fs";
 import { runCaptured, binaryAvailable } from "./process.mjs";
+
+// How many context lines to give agy around each diff hunk. The git
+// default is 3, which is far too little for review — agy can't see
+// imports, early returns, or nearby code and ends up flagging false
+// positives ("X not imported", "missing guard") for things that are
+// just outside the 3-line window. 25 covers the common cases; override
+// with AGY_REVIEW_CONTEXT.
+function reviewContextLines() {
+  const n = parseInt(process.env.AGY_REVIEW_CONTEXT ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 25;
+}
+
+// Full-file-context limits: include the complete current content of a
+// changed file when it's small enough that agy benefits from seeing
+// the whole structure, capped so a big changeset can't blow up the
+// prompt.
+const FULL_FILE_MAX_LINES = 400;
+const FULL_FILE_TOTAL_BUDGET_BYTES = 64 * 1024;
 
 /** Throws if `git` isn't on PATH. */
 export async function ensureGitAvailable() {
@@ -69,9 +88,10 @@ export async function workingTreeDiff(cwd) {
   await ensureGitAvailable();
   const root = await gitRoot(cwd);
   if (!root) throw new Error(`not in a git repo: ${cwd}`);
-  let diff = (await runCaptured("git", ["-C", root, "diff", "HEAD"], { cwd: root })).stdout;
+  const U = `-U${reviewContextLines()}`;
+  let diff = (await runCaptured("git", ["-C", root, "diff", U, "HEAD"], { cwd: root })).stdout;
   if (!diff.trim()) {
-    diff = (await runCaptured("git", ["-C", root, "diff"], { cwd: root })).stdout;
+    diff = (await runCaptured("git", ["-C", root, "diff", U], { cwd: root })).stdout;
   }
   const files = await diffFiles(root, ["HEAD"]);
   return {
@@ -102,7 +122,8 @@ export async function branchDiff(cwd, baseRef) {
   if (!headSha) throw new Error("HEAD is missing or detached and unresolvable");
   const mb = await mergeBase(root, baseSha, headSha);
   const compareBase = mb ?? baseSha;
-  const diff = (await runCaptured("git", ["-C", root, "diff", `${compareBase}...HEAD`], { cwd: root })).stdout;
+  const U = `-U${reviewContextLines()}`;
+  const diff = (await runCaptured("git", ["-C", root, "diff", U, `${compareBase}...HEAD`], { cwd: root })).stdout;
   const files = await diffFiles(root, [`${compareBase}...HEAD`]);
   return {
     scope: "branch",
@@ -114,6 +135,52 @@ export async function branchDiff(cwd, baseRef) {
     files,
     root,
   };
+}
+
+/**
+ * Read the full current content of changed files so agy sees whole
+ * structure (imports, early returns, neighbouring code) rather than
+ * just diff hunks — the #1 source of review false positives.
+ *
+ * Skips files that are missing/deleted, larger than
+ * FULL_FILE_MAX_LINES, or that would push the cumulative size past
+ * FULL_FILE_TOTAL_BUDGET_BYTES. Binary-ish content is skipped (NUL
+ * byte heuristic). Returns { included: [{path, content}], omitted:
+ * [{path, reason}] }.
+ */
+export async function gatherFileContext(root, files, opts = {}) {
+  const maxLines = opts.maxLines ?? FULL_FILE_MAX_LINES;
+  const budget = opts.budgetBytes ?? FULL_FILE_TOTAL_BUDGET_BYTES;
+  const included = [];
+  const omitted = [];
+  let used = 0;
+  for (const rel of files ?? []) {
+    const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    let content;
+    try {
+      content = await fsp.readFile(abs, "utf8");
+    } catch {
+      omitted.push({ path: rel, reason: "missing/deleted" });
+      continue;
+    }
+    if (content.includes("\0")) {
+      omitted.push({ path: rel, reason: "binary" });
+      continue;
+    }
+    const lineCount = content.split("\n").length;
+    if (lineCount > maxLines) {
+      omitted.push({ path: rel, reason: `too large (${lineCount} lines)` });
+      continue;
+    }
+    const bytes = Buffer.byteLength(content, "utf8");
+    if (used + bytes > budget) {
+      omitted.push({ path: rel, reason: "budget exceeded" });
+      continue;
+    }
+    used += bytes;
+    included.push({ path: rel, content });
+  }
+  return { included, omitted };
 }
 
 /**

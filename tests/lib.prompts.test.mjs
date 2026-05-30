@@ -102,3 +102,29 @@ describe("buildAdversarialPrompt", () => {
     expect(p).toContain("the retry/backoff design");
   });
 });
+
+describe("full-file context block", () => {
+  const ctxWithFiles = {
+    ...WORKING_TREE,
+    fullFiles: [{ path: "foo.js", content: "import x from 'x';\nconst y = 1;\n" }],
+    omittedFiles: [{ path: "huge.js", reason: "too large (900 lines)" }],
+  };
+
+  it("review prompt includes full file content when present", () => {
+    const p = buildReviewPrompt({ diffContext: ctxWithFiles });
+    expect(p).toContain("Full current content of the changed files");
+    expect(p).toContain("### foo.js");
+    expect(p).toContain("import x from 'x';");
+    expect(p).toContain("huge.js"); // omitted note
+  });
+
+  it("review prompt has no full-file section when fullFiles empty", () => {
+    const p = buildReviewPrompt({ diffContext: { ...WORKING_TREE, fullFiles: [] } });
+    expect(p).not.toContain("Full current content of the changed files");
+  });
+
+  it("adversarial prompt also includes full file content", () => {
+    const p = buildAdversarialPrompt({ diffContext: ctxWithFiles });
+    expect(p).toContain("### foo.js");
+  });
+});

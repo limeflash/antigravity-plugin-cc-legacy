@@ -494,10 +494,14 @@ cmd_review() {
   local path
   path="$(require_ready)"
   local repo_dir="${CLAUDE_PROJECT_DIR:-$PWD}"
+  # -U<N> gives agy more context around each hunk than git's default 3
+  # lines, so it can see imports / early returns / nearby code and stop
+  # flagging false positives for things just outside the window.
+  local ctx="${AGY_REVIEW_CONTEXT:-25}"
   local diff
-  diff="$(git -C "$repo_dir" diff HEAD 2>/dev/null || true)"
+  diff="$(git -C "$repo_dir" diff "-U${ctx}" HEAD 2>/dev/null || true)"
   if [ -z "$diff" ]; then
-    diff="$(git -C "$repo_dir" diff 2>/dev/null || true)"
+    diff="$(git -C "$repo_dir" diff "-U${ctx}" 2>/dev/null || true)"
   fi
   if [ -z "$diff" ]; then
     echo "error: no git diff found in $repo_dir. Stage or make changes first." >&2
@@ -524,8 +528,34 @@ cmd_review() {
     } >&2
   fi
 
+  # Full content of small changed files, so agy sees whole-file
+  # structure (imports, guards) not just hunks. Cap per-file lines and
+  # total bytes so a big changeset can't blow up the prompt.
+  local max_lines="${AGY_REVIEW_FULLFILE_MAX_LINES:-400}"
+  local budget="${AGY_REVIEW_FULLFILE_BUDGET_BYTES:-65536}"
+  local files_block="" used=0
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    local abs="$repo_dir/$f"
+    [ -f "$abs" ] || continue
+    # skip binary (NUL byte present)
+    if grep -qI . "$abs" 2>/dev/null; then :; else continue; fi
+    local lc; lc="$(wc -l < "$abs" 2>/dev/null || echo 999999)"
+    [ "$lc" -le "$max_lines" ] || continue
+    local sz; sz="$(wc -c < "$abs" 2>/dev/null || echo 0)"
+    used=$((used + sz))
+    [ "$used" -le "$budget" ] || continue
+    local ext="${f##*.}"
+    files_block="${files_block}"$'\n'"### ${f}"$'\n'"\`\`\`${ext}"$'\n'"$(cat "$abs")"$'\n'"\`\`\`"$'\n'
+  done < <(git -C "$repo_dir" diff --name-only HEAD 2>/dev/null)
+
   local full
-  full=$(printf '%s\n\nDiff:\n```diff\n%s\n```\n' "$focus" "$diff")
+  if [ -n "$files_block" ]; then
+    full=$(printf '%s\n\nFull current content of the changed files (for context — do NOT flag issues already handled elsewhere in these files):\n%s\nDiff (with expanded context):\n```diff\n%s\n```\n' "$focus" "$files_block" "$diff")
+  else
+    full=$(printf '%s\n\nDiff (with expanded context):\n```diff\n%s\n```\n' "$focus" "$diff")
+  fi
   # Route through the write_file workaround (agy issue #76). Reviews can
   # run long on big diffs; default to 10 minutes.
   _agy_capture "$path" "" "${AGY_REVIEW_TIMEOUT:-10m0s}" "$full"

@@ -40,6 +40,7 @@ import { findAgyBinary } from "./lib/agy.mjs";
 import {
   workingTreeDiff,
   branchDiff,
+  gatherFileContext,
   isGitRepo,
   isWorkingTreeClean,
   changeSummary,
@@ -49,7 +50,7 @@ import {
 } from "./lib/git.mjs";
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 
-const VERSION = "0.5.3";
+const VERSION = "0.5.4";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
@@ -339,6 +340,17 @@ async function runReviewCommand(argv, { adversarial }) {
         : "No working-tree diff. Stage or make changes first.\n",
     );
     process.exit(1);
+  }
+
+  // Attach full content of (small) changed files so agy sees whole-file
+  // structure, not just diff hunks — cuts the false-positive rate
+  // ("X not imported", "missing guard") on real reviews.
+  try {
+    const ctx = await gatherFileContext(diffContext.root ?? workspaceRoot, diffContext.files);
+    diffContext.fullFiles = ctx.included;
+    diffContext.omittedFiles = ctx.omitted;
+  } catch {
+    diffContext.fullFiles = [];
   }
 
   const focus = joinPositional(parsed);

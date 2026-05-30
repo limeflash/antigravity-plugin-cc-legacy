@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.4] - 2026-05-30 (limeflash fork)
+
+Cuts review false positives by giving agy real context. Motivated by a
+live run where agy flagged 3 HIGH issues that were all false positives
+("X not imported", "missing guard") — because it only saw 3-line diff
+hunks and couldn't see the import/guard just outside the window.
+
+### Changed
+- **Review diffs now use `-U25`** (was git's default `-U3`) so agy sees
+  imports, early returns, and neighbouring code around each hunk.
+  Override with `AGY_REVIEW_CONTEXT`. Applies to `/agy:review`,
+  `/agy:review --base`, and `/agy:adversarial-review` (both the Bash
+  wrapper and the Node companion).
+- **Full content of small changed files is now attached** to the
+  review prompt (≤400 lines/file, ≤64 KB total; binaries and large
+  files skipped with a note), so agy can verify whole-file structure
+  instead of guessing from hunks. New `gatherFileContext` helper in
+  `lib/git.mjs`; rendered by `lib/prompts.mjs`.
+
+### Verified live
+Reproduced the exact false-positive pattern (a change ~60 lines away
+from its import + null-guard): with `-U25` + full file, agy correctly
+reported "logger is imported on line 1", "null guard present on line
+32", and **no issues** — where `-U3` would have flagged both as bugs.
+171 vitest pass.
+
 ## [0.5.3] - 2026-05-30 (limeflash fork)
 
 Adds safety rails to `/agy:rescue`, which runs agy with

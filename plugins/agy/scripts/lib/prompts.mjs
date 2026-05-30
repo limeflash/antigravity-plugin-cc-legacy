@@ -28,6 +28,34 @@ function joinRules(rules) {
   return rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
 }
 
+// Render the full-file-context block. Giving the reviewer whole files
+// (not just diff hunks) is what kills false positives like "X is not
+// imported" or "missing guard" — the import / guard is usually just
+// outside the hunk. Returns "" when there are no included files.
+function fullFilesBlock(diffContext) {
+  const files = diffContext.fullFiles ?? [];
+  if (files.length === 0) return "";
+  const parts = [
+    "",
+    "Full current content of the changed files (for context — the diff below shows what changed within them; do NOT flag issues that are already handled elsewhere in these files):",
+  ];
+  for (const f of files) {
+    const ext = (f.path.split(".").pop() || "").toLowerCase();
+    parts.push(`\n### ${f.path}`);
+    parts.push("```" + ext);
+    parts.push(f.content.replace(/\n$/, ""));
+    parts.push("```");
+  }
+  const omitted = diffContext.omittedFiles ?? [];
+  const tooBig = omitted.filter((o) => /too large|budget/.test(o.reason));
+  if (tooBig.length) {
+    parts.push(
+      `\n(Full content omitted for ${tooBig.length} larger file(s); rely on the expanded diff hunks for those: ${tooBig.map((o) => o.path).join(", ")}.)`,
+    );
+  }
+  return parts.join("\n");
+}
+
 /**
  * Build the prompt for `/agy:review`. `diffContext` is the result of
  * lib/git.mjs:workingTreeDiff or branchDiff. `focus` is the
@@ -54,7 +82,9 @@ export function buildReviewPrompt({ diffContext, focus }) {
     scopeBlurb,
     filesBlock,
     focusBlock,
-    "Diff:",
+    fullFilesBlock(diffContext),
+    "",
+    "Diff (with expanded context):",
     "```diff",
     diffContext.diff,
     "```",
@@ -82,7 +112,9 @@ export function buildAdversarialPrompt({ diffContext, focus }) {
     "",
     scopeBlurb,
     focusBlock,
-    "Diff:",
+    fullFilesBlock(diffContext),
+    "",
+    "Diff (with expanded context):",
     "```diff",
     diffContext.diff,
     "```",

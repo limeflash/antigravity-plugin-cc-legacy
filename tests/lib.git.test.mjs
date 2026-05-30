@@ -11,6 +11,7 @@ import {
   mergeBase,
   workingTreeDiff,
   branchDiff,
+  gatherFileContext,
   isGitRepo,
   isWorkingTreeClean,
   changeSummary,
@@ -189,5 +190,38 @@ describe("safety helpers (rescue guards + isolation)", () => {
       await removeWorktree(repo, wtDir);
       await fsp.rm(wtParent, { recursive: true, force: true });
     }
+  });
+});
+
+describe("gatherFileContext", () => {
+  it("includes small text files, skips large ones", async () => {
+    await fsp.writeFile(path.join(repo, "small.js"), "export const a = 1;\n");
+    const big = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+    await fsp.writeFile(path.join(repo, "big.js"), big + "\n");
+    const r = await gatherFileContext(repo, ["small.js", "big.js"], { maxLines: 10 });
+    expect(r.included.map((f) => f.path)).toEqual(["small.js"]);
+    expect(r.included[0].content).toContain("export const a = 1;");
+    expect(r.omitted.find((o) => o.path === "big.js").reason).toMatch(/too large/);
+  });
+
+  it("marks missing files as omitted", async () => {
+    const r = await gatherFileContext(repo, ["does-not-exist.js"]);
+    expect(r.included).toEqual([]);
+    expect(r.omitted[0].reason).toMatch(/missing/);
+  });
+
+  it("respects the total byte budget", async () => {
+    await fsp.writeFile(path.join(repo, "a.txt"), "x".repeat(100) + "\n");
+    await fsp.writeFile(path.join(repo, "b.txt"), "y".repeat(100) + "\n");
+    const r = await gatherFileContext(repo, ["a.txt", "b.txt"], { budgetBytes: 120 });
+    expect(r.included.length).toBe(1);
+    expect(r.omitted.find((o) => o.reason === "budget exceeded")).toBeTruthy();
+  });
+
+  it("skips binary content (NUL byte)", async () => {
+    await fsp.writeFile(path.join(repo, "bin.dat"), Buffer.from([0x41, 0x00, 0x42]));
+    const r = await gatherFileContext(repo, ["bin.dat"]);
+    expect(r.included).toEqual([]);
+    expect(r.omitted[0].reason).toBe("binary");
   });
 });
