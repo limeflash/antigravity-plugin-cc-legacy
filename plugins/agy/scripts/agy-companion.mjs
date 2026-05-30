@@ -145,10 +145,13 @@ async function cmdRescue(argv) {
   });
 
   if (!background) {
-    // Foreground: invoke the worker synchronously, then exit with its
-    // result. We don't re-spawn a detached child; we run agy ourselves.
-    const finalStatus = await runJobWorker(workspaceRoot, record.id);
-    const final = await reReadAndPrintLog(workspaceRoot, record.id);
+    // Foreground: run agy synchronously in-process. Pass teeLogFile so
+    // the worker both shows output live AND persists it to the job log,
+    // so a follow-up /agy:result <id> still works. (No reReadAndPrintLog
+    // afterward — that would double-print what the tee already showed.)
+    const finalStatus = await runJobWorker(workspaceRoot, record.id, {
+      teeLogFile: jobLogPath(workspaceRoot, record.id),
+    });
     process.exit(
       finalStatus === "completed" || finalStatus === "canceled" ? 0 : 1,
     );
@@ -244,8 +247,9 @@ async function runReviewCommand(argv, { adversarial }) {
   });
 
   if (!background) {
-    const finalStatus = await runJobWorker(workspaceRoot, record.id);
-    await reReadAndPrintLog(workspaceRoot, record.id);
+    const finalStatus = await runJobWorker(workspaceRoot, record.id, {
+      teeLogFile: jobLogPath(workspaceRoot, record.id),
+    });
     process.exit(finalStatus === "completed" ? 0 : 1);
   }
 

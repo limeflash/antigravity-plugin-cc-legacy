@@ -3,7 +3,7 @@
 // state.mjs is pure I/O on the record; this module owns the process
 // lifecycle that produces those records.
 
-import { promises as fsp } from "node:fs";
+import { promises as fsp, createWriteStream } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -94,23 +94,53 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
   if (!record) {
     throw new Error(`runJobWorker: no such job '${jobId}'`);
   }
-  // Stream from this point goes to whatever stdio the parent gave
-  // us. The detached spawner directs both fds to the log file, so
-  // anything we write here is captured.
-  process.stdout.write(`[agy-job ${jobId}] starting at ${nowIso()}\n`);
-  process.stdout.write(`[agy-job ${jobId}] task: ${record.task}\n`);
-  if (record.model) {
-    process.stdout.write(`[agy-job ${jobId}] model: ${record.model}\n`);
+
+  // Output routing. Two contexts call this:
+  //   - The detached background worker: its stdout fd is already
+  //     redirected to the job log, so writing to process.stdout IS
+  //     writing to the log. opts.teeLogFile is unset.
+  //   - The foreground caller (cmdRescue without --background): runs
+  //     in-process with stdout = the user's terminal. To persist the
+  //     output for a later /agy:result, we ALSO open the log file and
+  //     tee every write to it. opts.teeLogFile = the log path.
+  //
+  // Either way, `sink(text)` is the single choke point all output
+  // flows through, so the captured log and the live view never drift.
+  let teeStream = null;
+  if (opts.teeLogFile) {
+    await ensureDir(path.dirname(opts.teeLogFile));
+    teeStream = createWriteStream(opts.teeLogFile, { flags: "a", mode: 0o600 });
   }
-  process.stdout.write(`[agy-job ${jobId}] ---\n`);
+  const sink = (text) => {
+    process.stdout.write(text);
+    if (teeStream) teeStream.write(text);
+  };
+
+  // Mark running + stamp startedAt (foreground records were left
+  // pending before this fix; background already set these in
+  // startTrackedJob but re-stamping is harmless and merge-safe).
+  await updateJob(workspaceRoot, jobId, {
+    status: "running",
+    startedAt: record.startedAt ?? nowIso(),
+  });
+
+  sink(`[agy-job ${jobId}] starting at ${nowIso()}\n`);
+  sink(`[agy-job ${jobId}] task: ${record.task}\n`);
+  if (record.model) {
+    sink(`[agy-job ${jobId}] model: ${record.model}\n`);
+  }
+  sink(`[agy-job ${jobId}] ---\n`);
 
   const runner = opts.runner ?? defaultAgyRunner;
   let exitCode = null;
   let failed = false;
   try {
-    exitCode = await runner(record);
+    // Pass the sink so the runner forwards agy's stdout/stderr through
+    // the same choke point (tests inject their own runner and may
+    // ignore the second arg).
+    exitCode = await runner(record, { sink });
   } catch (err) {
-    process.stderr.write(`[agy-job ${jobId}] worker error: ${err?.stack ?? err}\n`);
+    sink(`[agy-job ${jobId}] worker error: ${err?.stack ?? err}\n`);
     failed = true;
   }
 
@@ -127,18 +157,25 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
   });
   // Best-effort PID file cleanup so /agy:status doesn't dangle.
   try { await fsp.rm(jobPidPath(workspaceRoot, jobId)); } catch { /* ok */ }
-  process.stdout.write(`[agy-job ${jobId}] ---\n`);
-  process.stdout.write(`[agy-job ${jobId}] done: status=${finalStatus} exitCode=${exitCode}\n`);
+  sink(`[agy-job ${jobId}] ---\n`);
+  sink(`[agy-job ${jobId}] done: status=${finalStatus} exitCode=${exitCode}\n`);
+
+  // Flush + close the tee stream before returning so a follow-up
+  // /agy:result reads a complete log.
+  if (teeStream) {
+    await new Promise((resolve) => teeStream.end(resolve));
+  }
   return finalStatus;
 }
 
 /**
  * The default agy invocation strategy: spawn `agy --print "<prompt>"`,
- * inheriting our stdio. Returns the exit code. The companion's
- * detached log redirection means stdout/stderr land in the job log
- * automatically.
+ * piping its stdout/stderr through the provided `sink` so the output
+ * lands in the job log (background) and/or the terminal (foreground)
+ * exactly once. Returns the exit code.
  */
-async function defaultAgyRunner(record) {
+async function defaultAgyRunner(record, { sink } = {}) {
+  const emit = sink ?? ((t) => process.stdout.write(t));
   const { meta } = record;
   const prompt = meta?.prompt;
   if (!prompt) {
@@ -148,11 +185,13 @@ async function defaultAgyRunner(record) {
   const args = ["--print", prompt, ...(record.args ?? [])];
   return await new Promise((resolve) => {
     const child = spawn(agyBin, args, {
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", "pipe", "pipe"],
       cwd: record.workspaceRoot,
     });
+    child.stdout.on("data", (chunk) => emit(chunk.toString()));
+    child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
-      process.stderr.write(`[agy-job ${record.id}] spawn error: ${err.message}\n`);
+      emit(`[agy-job ${record.id}] spawn error: ${err.message}\n`);
       resolve(127);
     });
     child.on("close", (code) => resolve(code ?? 0));
