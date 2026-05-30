@@ -7,6 +7,7 @@ import { promises as fsp, createWriteStream } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import os from "node:os";
 
 import {
   createJob,
@@ -169,10 +170,27 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
 }
 
 /**
- * The default agy invocation strategy: spawn `agy --print "<prompt>"`,
- * piping its stdout/stderr through the provided `sink` so the output
- * lands in the job log (background) and/or the terminal (foreground)
- * exactly once. Returns the exit code.
+ * The default agy invocation strategy.
+ *
+ * Works around agy issue #76: `agy --print` flushes ZERO bytes to a
+ * non-TTY stdout (the response is generated but the "drip" writer only
+ * targets a real terminal). Since the companion always runs agy from a
+ * subprocess, capturing stdout returns nothing. Instead we instruct agy
+ * in the prompt to write its full answer to a temp file via write_file,
+ * then read that file and emit it through `sink` (so it lands in the job
+ * log / terminal).
+ *
+ * write_file needs auto-approval → --dangerously-skip-permissions. Blast
+ * radius is scoped:
+ *   - stdin is ignored (=/dev/null) so agy can't hang on a non-TTY stdin
+ *     (the other half of #76).
+ *   - read-only kinds (review / adversarial-review) get --sandbox and
+ *     --add-dir ONLY the temp dir — agy can't touch the repo.
+ *   - rescue is write-capable by design (it's a delegated coding task),
+ *     so it also gets --add-dir <workspaceRoot>. It is NOT sandboxed,
+ *     matching the "hand the task to another agent" intent.
+ *
+ * Returns the agy exit code.
  */
 async function defaultAgyRunner(record, { sink } = {}) {
   const emit = sink ?? ((t) => process.stdout.write(t));
@@ -182,20 +200,54 @@ async function defaultAgyRunner(record, { sink } = {}) {
     throw new Error("defaultAgyRunner: record has no meta.prompt");
   }
   const agyBin = meta?.agyBin ?? "agy";
-  const args = ["--print", prompt, ...(record.args ?? [])];
-  return await new Promise((resolve) => {
+
+  const outDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-"));
+  const outFile = path.join(outDir, "response.md");
+  const augmented =
+    `${prompt}\n\n---\n` +
+    `OUTPUT INSTRUCTION (required): Use the write_file tool to write your ` +
+    `COMPLETE response to this exact path:\n${outFile}\n` +
+    `Do NOT print the answer to chat — that path is your only deliverable. ` +
+    `After writing the file, stop.`;
+
+  const writeCapable = record.kind === "rescue";
+  const args = ["--dangerously-skip-permissions"];
+  if (!writeCapable) args.push("--sandbox");
+  args.push("--add-dir", outDir);
+  if (writeCapable) args.push("--add-dir", record.workspaceRoot);
+  args.push(...(record.args ?? []));
+  args.push("--print", augmented);
+
+  const code = await new Promise((resolve) => {
     const child = spawn(agyBin, args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdin ignored (=/dev/null) to dodge the non-TTY hang; stdout
+      // ignored because #76 leaves it empty; stderr piped so real agy
+      // errors still surface in the log.
+      stdio: ["ignore", "ignore", "pipe"],
       cwd: record.workspaceRoot,
     });
-    child.stdout.on("data", (chunk) => emit(chunk.toString()));
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
       emit(`[agy-job ${record.id}] spawn error: ${err.message}\n`);
       resolve(127);
     });
-    child.on("close", (code) => resolve(code ?? 0));
+    child.on("close", (c) => resolve(c ?? 0));
   });
+
+  // Read agy's written response and emit it so it lands in the job log.
+  try {
+    const content = await fsp.readFile(outFile, "utf8");
+    if (content.length > 0) {
+      emit(content.endsWith("\n") ? content : content + "\n");
+    } else {
+      emit(`[agy-job ${record.id}] agy wrote an empty response file (issue #76 workaround produced nothing).\n`);
+    }
+  } catch {
+    emit(`[agy-job ${record.id}] agy produced no response file — it may have timed out or declined write_file.\n`);
+  } finally {
+    await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
+  }
+  return code;
 }
 
 /**

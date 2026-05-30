@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // agy-companion.mjs — Node.js entry point for the stateful slash
 // commands that the Bash wrapper (`agy-run.sh`) can't easily express:
 // background jobs, status/result/cancel, branch-base review,

@@ -362,6 +362,93 @@ with_model_override() {
   with_settings_lock _do_patched_run "$canonical" "$@"
 }
 
+# ---------------------------------------------------------------------------
+# agy issue #76 workaround.
+#
+# `agy --print`, when stdout is NOT a TTY (i.e. any time the plugin runs
+# it from a subprocess / agent Bash tool), generates the response
+# internally but flushes ZERO bytes to stdout — the "drip" typewriter
+# writer only targets a real terminal. Confirmed on agy 1.0.3:
+# `Drip stopped: length=N` in the log while stdout stays empty. Capturing
+# stdout therefore returns nothing in the plugin's actual usage context.
+#
+# Separately, `agy --print` blocks forever on a non-TTY stdin that never
+# reaches EOF (it ignores --print-timeout in that state).
+#
+# The only reliable headless path is to instruct agy IN THE PROMPT to
+# write its full answer to a file via the write_file tool, then read that
+# file. write_file needs auto-approval, so we pass
+# --dangerously-skip-permissions, but scope the blast radius:
+#   - --sandbox          keeps terminal/shell tool use restricted
+#   - --add-dir <tmpdir> grants write access ONLY to a throwaway temp dir
+#   - </dev/null         closes stdin so agy can't hang on it
+#
+# Usage: _agy_capture <agy> <canonical-model-or-empty> <timeout> <prompt> [extra agy args...]
+# Prints the response on success (rc 0); prints an error and rc 1 if the
+# response file came back empty.
+# ---------------------------------------------------------------------------
+_agy_capture() {
+  local agy="$1" canonical="$2" timeout="$3" prompt="$4"
+  shift 4
+  local outdir
+  outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
+  local outfile="$outdir/agy-response.md"
+  # agy may be a Windows .exe invoked from Git Bash, which needs a native
+  # Windows path for both --add-dir and the write_file target.
+  local prompt_path target_dir
+  if command -v cygpath >/dev/null 2>&1; then
+    prompt_path="$(cygpath -w "$outfile")"
+    target_dir="$(cygpath -w "$outdir")"
+  else
+    prompt_path="$outfile"
+    target_dir="$outdir"
+  fi
+  local augmented
+  augmented="$(printf '%s\n\n---\nOUTPUT INSTRUCTION (required): Use the write_file tool to write your COMPLETE response to this exact path:\n%s\nDo NOT print the answer to chat — that path is your only deliverable. After writing the file, stop.\n' "$prompt" "$prompt_path")"
+
+  # Decide whether the per-call model override is actually usable. agy
+  # 1.0.x does NOT keep a top-level "model" key in settings.json until
+  # the user changes the model in the TUI, so the patch-and-restore path
+  # has nothing to patch. Rather than hard-fail the whole command (the
+  # old validate_settings_file did `exit 1`), degrade gracefully: warn
+  # once and run with agy's current default model.
+  local use_override=0
+  if [ -n "$canonical" ]; then
+    if [ -f "$AGY_SETTINGS_FILE" ] && grep -q '"model"' "$AGY_SETTINGS_FILE" 2>/dev/null; then
+      use_override=1
+    else
+      echo "[wrapper] note: --model requested, but agy's settings.json has no \"model\" field to patch on this version; using the current default model instead. (Set a model once in the agy TUI to enable per-call overrides.)" >&2
+    fi
+  fi
+
+  if [ "$use_override" -eq 1 ]; then
+    with_model_override "$canonical" -- "$agy" --dangerously-skip-permissions --sandbox \
+      --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
+      </dev/null >/dev/null 2>&1 || true
+  else
+    "$agy" --dangerously-skip-permissions --sandbox \
+      --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
+      </dev/null >/dev/null 2>&1 || true
+  fi
+
+  local rc=0
+  if [ -s "$outfile" ]; then
+    cat "$outfile"
+  else
+    rc=1
+    {
+      echo "error: agy returned no output."
+      echo "       This is agy issue #76 (empty stdout in non-TTY) combined with the"
+      echo "       write_file workaround failing to produce a file. Possible causes:"
+      echo "       - the prompt timed out (raise the timeout), or"
+      echo "       - agy refused/limited the write_file tool."
+      echo "       Run \`agy\` interactively to debug, or check ~/.gemini/antigravity-cli/log/."
+    } >&2
+  fi
+  rm -rf "$outdir"
+  return "$rc"
+}
+
 cmd_ask() {
   local model_alias=""
   local model_flag_seen=0
@@ -397,11 +484,9 @@ cmd_ask() {
   fi
   local path
   path="$(require_ready)"
-  if [ -n "$canonical" ]; then
-    with_model_override "$canonical" -- "$path" -p "$prompt" "$@"
-  else
-    "$path" -p "$prompt" "$@"
-  fi
+  # Route through the write_file workaround (agy issue #76). Default to an
+  # 8-minute timeout; agy usually writes the file within seconds.
+  _agy_capture "$path" "$canonical" "${AGY_ASK_TIMEOUT:-8m0s}" "$prompt" "$@"
 }
 
 cmd_review() {
@@ -441,7 +526,9 @@ cmd_review() {
 
   local full
   full=$(printf '%s\n\nDiff:\n```diff\n%s\n```\n' "$focus" "$diff")
-  "$path" -p "$full"
+  # Route through the write_file workaround (agy issue #76). Reviews can
+  # run long on big diffs; default to 10 minutes.
+  _agy_capture "$path" "" "${AGY_REVIEW_TIMEOUT:-10m0s}" "$full"
 }
 
 cmd_image() {
