@@ -568,7 +568,13 @@ cmd_review() {
       local rp rr
       rp="$(realpath "$abs" 2>/dev/null || echo)"
       rr="$(realpath "$repo_dir" 2>/dev/null || echo "$repo_dir")"
-      case "$rp" in "$rr"/*) : ;; *) continue ;; esac
+      # Case-insensitive prefix match: Windows/macOS filesystems are
+      # case-insensitive, and realpath may return different casing than
+      # $repo_dir, which would wrongly skip a legitimate in-repo file.
+      local rp_l rr_l
+      rp_l="$(printf '%s' "$rp" | tr '[:upper:]' '[:lower:]')"
+      rr_l="$(printf '%s' "$rr" | tr '[:upper:]' '[:lower:]')"
+      case "$rp_l" in "$rr_l"/*) : ;; *) continue ;; esac
     fi
     # skip binary (no NUL byte => text)
     if grep -qI . "$abs" 2>/dev/null; then :; else continue; fi
@@ -589,7 +595,9 @@ cmd_review() {
     local maxrun
     maxrun="$(grep -oE '`+' "$abs" 2>/dev/null | awk '{ if (length>m) m=length } END { n=(m<2?2:m)+1; print n }')"
     [ -n "$maxrun" ] || maxrun=3
-    local fence; fence="$(printf '%.0s`' $(seq 1 "$maxrun"))"
+    # Build the fence without `seq` (absent in some minimal shells).
+    local fence="" _i
+    for ((_i = 0; _i < maxrun; _i++)); do fence="${fence}\`"; done
     files_block="${files_block}"$'\n'"### ${f}"$'\n'"${fence}${ext}"$'\n'"$(cat "$abs")"$'\n'"${fence}"$'\n'
   done < <(git -C "$repo_dir" diff --name-only "${diff_range[@]}" 2>/dev/null)
 

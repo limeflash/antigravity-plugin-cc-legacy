@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.7] - 2026-05-30 (limeflash fork)
+
+Fourth dogfood round converged on polish only (no new HIGH issues) —
+fixed the two cheap robustness nits and stopped.
+
+### Fixed
+- Bash worktree-containment prefix match is now case-insensitive
+  (Windows/macOS filesystems are case-insensitive; `realpath` casing
+  could otherwise wrongly skip a legitimate in-repo file).
+- Build the dynamic backtick fence with a pure-Bash loop instead of
+  `seq` (absent in some minimal shells).
+
+### Dogfood summary
+Four rounds of the plugin reviewing its own code surfaced 7 → 4 → 4 →
+2 issues (real bugs → parity gaps → deep security edges → polish),
+all fixed or documented as accepted/refuted. The loop has converged.
+
 ## [0.5.6] - 2026-05-30 (limeflash fork)
 
 Third dogfood round (an adversarial self-review of 0.5.5). Fixed the
