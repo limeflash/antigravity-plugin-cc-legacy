@@ -40,7 +40,7 @@ import { findAgyBinary } from "./lib/agy.mjs";
 import {
   workingTreeDiff,
   branchDiff,
-  gatherFileContext,
+  stageReviewMaterials,
   isGitRepo,
   isWorkingTreeClean,
   changeSummary,
@@ -51,7 +51,7 @@ import {
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 import { scanDiffForSecrets } from "./lib/secrets.mjs";
 
-const VERSION = "0.5.7";
+const VERSION = "0.5.8";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
@@ -373,21 +373,32 @@ async function runReviewCommand(argv, { adversarial }) {
     );
   }
 
-  // Attach full content of (small) changed files so agy sees whole-file
-  // structure, not just diff hunks — cuts the false-positive rate
-  // ("X not imported", "missing guard") on real reviews.
+  // Design A+ : stage the full diff + full changed files to a temp dir
+  // agy reads from disk. Keeps the argv prompt tiny (no ENAMETOOLONG, no
+  // truncation), gives agy whole-file context, and never puts the repo
+  // in --add-dir.
+  const stageDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-review-"));
+  let staged = [];
+  let omitted = [];
   try {
-    const ctx = await gatherFileContext(diffContext.root ?? workspaceRoot, diffContext.files);
-    diffContext.fullFiles = ctx.included;
-    diffContext.omittedFiles = ctx.omitted;
-  } catch {
-    diffContext.fullFiles = [];
+    const r = await stageReviewMaterials(
+      stageDir,
+      diffContext.root ?? workspaceRoot,
+      diffContext.files,
+      diffContext.diff,
+    );
+    staged = r.staged;
+    omitted = r.omitted;
+  } catch (err) {
+    await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    process.stderr.write(`error: could not stage review materials: ${err.message}\n`);
+    process.exit(1);
   }
 
   const focus = joinPositional(parsed);
   const prompt = adversarial
-    ? buildAdversarialPrompt({ diffContext, focus })
-    : buildReviewPrompt({ diffContext, focus });
+    ? buildAdversarialPrompt({ diffContext, focus, stageDir, staged, omitted })
+    : buildReviewPrompt({ diffContext, focus, stageDir, staged, omitted });
 
   const background = parsed.flags.background;
   const wait = parsed.flags.wait;
@@ -403,12 +414,18 @@ async function runReviewCommand(argv, { adversarial }) {
     background,
     prompt,
     agyBin,
+    stageDir, // agy reads/writes here; repo is never --add-dir'd
   });
+
+  const cleanupStage = async () => {
+    await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+  };
 
   if (!background) {
     const finalStatus = await runJobWorker(workspaceRoot, record.id, {
       teeLogFile: jobLogPath(workspaceRoot, record.id),
     });
+    await cleanupStage();
     process.exit(finalStatus === "completed" ? 0 : 1);
   }
 
@@ -419,14 +436,18 @@ async function runReviewCommand(argv, { adversarial }) {
       pollMs: 750,
     });
     if (!final) {
+      await cleanupStage();
       process.stderr.write(`Job ${record.id} disappeared while waiting.\n`);
       process.exit(1);
     }
     await reReadAndPrintLog(workspaceRoot, record.id);
+    await cleanupStage();
     process.stdout.write(`\nJob ${record.id} ended with status: ${final.status}\n`);
     process.exit(final.status === "completed" ? 0 : 1);
   }
 
+  // Pure --background: the detached worker still needs the stage dir, so
+  // we leave it (it lives under the OS temp dir and is cleaned by the OS).
   process.stdout.write(
     [
       `Started ${taskSummary} job ${record.id} in background.`,

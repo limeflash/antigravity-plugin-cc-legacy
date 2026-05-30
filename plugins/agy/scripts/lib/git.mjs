@@ -238,6 +238,93 @@ export async function gatherFileContext(root, files, opts = {}) {
   return { included, omitted };
 }
 
+// Per-file cap for STAGED review materials. Much larger than the
+// embed budget (these go to disk, not the argv prompt), but still
+// bounded so a giant generated blob can't be copied.
+const STAGE_FILE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Design A+ : stage the review materials (the full diff + the full
+ * current content of the changed files) into `stageDir` so `agy` can
+ * read them FROM DISK instead of receiving them in the argv prompt.
+ * This removes the OS command-line length limit entirely (no
+ * ENAMETOOLONG, no truncation) and keeps the real repo out of agy's
+ * `--add-dir` scope.
+ *
+ * Writes:
+ *   <stageDir>/diff.patch
+ *   <stageDir>/files/<relpath>   (full content, mirroring repo layout)
+ *
+ * Applies the same safety checks as gatherFileContext (skip symlinks,
+ * skip paths that resolve outside the repo, skip binaries, skip files
+ * over STAGE_FILE_MAX_BYTES). Returns { staged: [relpath], omitted:
+ * [{path, reason}] }.
+ */
+export async function stageReviewMaterials(stageDir, root, files, diff, opts = {}) {
+  const maxBytes = opts.maxFileBytes ?? STAGE_FILE_MAX_BYTES;
+  await fsp.mkdir(stageDir, { recursive: true });
+  await fsp.writeFile(path.join(stageDir, "diff.patch"), diff ?? "");
+  const filesRoot = path.join(stageDir, "files");
+  const staged = [];
+  const omitted = [];
+  let realRoot;
+  try {
+    realRoot = await fsp.realpath(root);
+  } catch {
+    realRoot = root;
+  }
+  for (const rel of files ?? []) {
+    const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    let st;
+    try {
+      st = await fsp.lstat(abs);
+    } catch {
+      omitted.push({ path: rel, reason: "missing/deleted" });
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      omitted.push({ path: rel, reason: "symlink (skipped)" });
+      continue;
+    }
+    if (!st.isFile()) {
+      omitted.push({ path: rel, reason: "not a regular file" });
+      continue;
+    }
+    if (st.size > maxBytes) {
+      omitted.push({ path: rel, reason: `too large (${st.size} bytes)` });
+      continue;
+    }
+    // Directory-symlink containment: the real path must stay in the repo.
+    try {
+      const realAbs = await fsp.realpath(abs);
+      const within = path.relative(realRoot, realAbs);
+      if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+        omitted.push({ path: rel, reason: "resolves outside the repo" });
+        continue;
+      }
+    } catch {
+      omitted.push({ path: rel, reason: "unresolvable path" });
+      continue;
+    }
+    let content;
+    try {
+      content = await fsp.readFile(abs, "utf8");
+    } catch {
+      omitted.push({ path: rel, reason: "unreadable" });
+      continue;
+    }
+    if (content.includes("\0")) {
+      omitted.push({ path: rel, reason: "binary" });
+      continue;
+    }
+    const dest = path.join(filesRoot, rel);
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    await fsp.writeFile(dest, content);
+    staged.push(rel);
+  }
+  return { staged, omitted };
+}
+
 /**
  * List the file paths touched by a diff range. Internal helper for
  * the review prompt builder.

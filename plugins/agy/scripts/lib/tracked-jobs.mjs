@@ -52,6 +52,10 @@ export async function startTrackedJob(workspaceRoot, partial) {
       // directory instead of the real workspaceRoot. Job state still
       // lives under workspaceRoot.
       executionRoot: partial.executionRoot ?? null,
+      // When set (Design A+ review staging), agy runs in this dir, reads
+      // the pre-staged diff/files from it, and writes its response there;
+      // the repo is never added to --add-dir.
+      stageDir: partial.stageDir ?? null,
     },
   });
 
@@ -237,7 +241,13 @@ async function defaultAgyRunner(record, { sink } = {}) {
   }
   const agyBin = meta?.agyBin ?? "agy";
 
-  const outDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-"));
+  // Design A+ : review commands stage the diff + full files into a
+  // stageDir they own and pass it via meta.stageDir. We run agy IN that
+  // dir (read diff/files from disk, write response there), --add-dir it,
+  // and never touch the repo. For rescue/ask, stageDir is unset and we
+  // create our own throwaway outDir for the response.
+  const stageDir = meta?.stageDir ?? null;
+  const outDir = stageDir ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-")));
   const outFile = path.join(outDir, "response.md");
   const suffix =
     `\n\n---\n` +
@@ -257,9 +267,13 @@ async function defaultAgyRunner(record, { sink } = {}) {
   // user's real tree is never touched.
   const execRoot = record.meta?.executionRoot ?? record.workspaceRoot;
   const writeCapable = record.kind === "rescue";
+  // agy runs in the stage dir (review) or the execRoot (rescue/ask).
+  const cwd = stageDir ?? execRoot;
   const args = ["--dangerously-skip-permissions"];
   if (!writeCapable) args.push("--sandbox");
   args.push("--add-dir", outDir);
+  // rescue gets repo write access; review/ask never do (the repo is not
+  // in --add-dir at all — for review everything it needs is in stageDir).
   if (writeCapable) args.push("--add-dir", execRoot);
   args.push(...(record.args ?? []));
   args.push("--print", augmented);
@@ -270,7 +284,7 @@ async function defaultAgyRunner(record, { sink } = {}) {
       // ignored because #76 leaves it empty; stderr piped so real agy
       // errors still surface in the log.
       stdio: ["ignore", "ignore", "pipe"],
-      cwd: execRoot,
+      cwd,
     });
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
@@ -297,7 +311,11 @@ async function defaultAgyRunner(record, { sink } = {}) {
   } catch {
     emit(`[agy-job ${record.id}] agy produced no response file — it may have timed out or declined write_file.\n`);
   } finally {
-    await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
+    // Only clean up the dir WE created. When meta.stageDir is set the
+    // caller (runReviewCommand) owns and removes it.
+    if (!stageDir) {
+      await fsp.rm(outDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
   // 0 when we got a usable response; otherwise surface agy's code (or 1).
   if (produced) return 0;

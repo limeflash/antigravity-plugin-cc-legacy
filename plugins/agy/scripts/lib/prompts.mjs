@@ -28,65 +28,49 @@ function joinRules(rules) {
   return rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
 }
 
-// Longest run of consecutive backticks in `s` (>=3 only — shorter runs
-// don't threaten a fence). Used to size a code fence that can't be
-// closed early by the content itself.
-function longestBacktickRun(s) {
-  let max = 2; // so fence is at least 3
-  const m = s.match(/`+/g);
-  if (m) for (const run of m) if (run.length > max) max = run.length;
-  return max;
-}
-
-// Render the full-file-context block. Giving the reviewer whole files
-// (not just diff hunks) is what kills false positives like "X is not
-// imported" or "missing guard" — the import / guard is usually just
-// outside the hunk. Returns "" when there are no included files.
-function fullFilesBlock(diffContext) {
-  const files = diffContext.fullFiles ?? [];
-  if (files.length === 0) return "";
+// Design A+ : the diff and full file content live on disk in a staging
+// dir that agy can read; the prompt only POINTS at them. This keeps the
+// argv prompt tiny (no ENAMETOOLONG, no truncation) and gives agy the
+// whole file for context (kills "X not imported" / "missing guard"
+// false positives). `stageDir` is an absolute path agy can read
+// (passed via --add-dir); `staged` is the list of staged relpaths.
+function stagedMaterialsBlock(stageDir, staged, omitted) {
+  const sep = stageDir.includes("\\") ? "\\" : "/";
+  const diffPath = `${stageDir}${sep}diff.patch`;
+  const filesDir = `${stageDir}${sep}files`;
   const parts = [
     "",
-    "Full current content of the changed files (for context — the diff below shows what changed within them; do NOT flag issues that are already handled elsewhere in these files):",
+    "## Material to review (read these files with your tools — they are on disk, not inline)",
+    `- The unified diff (with expanded context) is at:\n  ${diffPath}`,
   ];
-  for (const f of files) {
-    const ext = (f.path.split(".").pop() || "").toLowerCase();
-    // Dynamic fence: use one more backtick than the longest backtick
-    // run in the file, so content that itself contains ``` or ```` (this
-    // plugin's own prompts.mjs does!) can't terminate the block early.
-    const fence = "`".repeat(longestBacktickRun(f.content) + 1);
-    parts.push(`\n### ${f.path}`);
-    parts.push(fence + ext);
-    parts.push(f.content.replace(/\n$/, ""));
-    parts.push(fence);
-  }
-  const omitted = diffContext.omittedFiles ?? [];
-  const tooBig = omitted.filter((o) => /too large|budget/.test(o.reason));
-  if (tooBig.length) {
+  if (staged && staged.length) {
     parts.push(
-      `\n(Full content omitted for ${tooBig.length} larger file(s); rely on the expanded diff hunks for those: ${tooBig.map((o) => o.path).join(", ")}.)`,
+      `- The FULL current content of the changed files is under:\n  ${filesDir}${sep}<same relative path>`,
+      `  Read the ones you need for context. Do NOT flag an issue (missing import, undefined name, missing guard) as a bug unless you've checked the full file and confirmed it — the definition is often outside the diff hunk.`,
+      "  Changed files staged for you:",
+      ...staged.map((f) => `    - ${f}`),
+    );
+  }
+  const big = (omitted ?? []).filter((o) => /too large|binary|symlink|outside/.test(o.reason));
+  if (big.length) {
+    parts.push(
+      `  (Not staged: ${big.map((o) => `${o.path} [${o.reason}]`).join(", ")} — judge those from the diff alone, and mark cross-context concerns as [UNVERIFIED].)`,
     );
   }
   return parts.join("\n");
 }
 
 /**
- * Build the prompt for `/agy:review`. `diffContext` is the result of
- * lib/git.mjs:workingTreeDiff or branchDiff. `focus` is the
- * user-supplied steer (optional, may be empty).
+ * Build the prompt for `/agy:review`. Tiny argv prompt that points at
+ * the staged diff + files (see Design A+). `staged`/`omitted` come from
+ * lib/git.mjs:stageReviewMaterials; `stageDir` is its absolute path.
  */
-export function buildReviewPrompt({ diffContext, focus }) {
+export function buildReviewPrompt({ diffContext, focus, stageDir, staged, omitted }) {
   const scopeBlurb =
     diffContext.scope === "branch"
       ? `Branch review: HEAD compared against merge-base of HEAD and \`${diffContext.base}\` (resolved sha: ${diffContext.mergeBase ?? "?"}).`
       : `Working-tree review: uncommitted changes against \`HEAD\`.`;
-  const focusBlock = focus
-    ? `\n\nUser focus / extra steer:\n${focus.trim()}\n`
-    : "";
-  const filesBlock =
-    diffContext.files.length > 0
-      ? `\n\nFiles touched (${diffContext.files.length}):\n${diffContext.files.map((f) => `- ${f}`).join("\n")}\n`
-      : "";
+  const focusBlock = focus ? `\n\nUser focus / extra steer:\n${focus.trim()}` : "";
   return [
     PREAMBLE_REVIEW,
     "",
@@ -94,30 +78,22 @@ export function buildReviewPrompt({ diffContext, focus }) {
     joinRules(REVIEW_RULES),
     "",
     scopeBlurb,
-    filesBlock,
     focusBlock,
-    fullFilesBlock(diffContext),
-    "",
-    "Diff (with expanded context):",
-    "```diff",
-    diffContext.diff,
-    "```",
+    stagedMaterialsBlock(stageDir, staged, omitted),
     "",
   ].join("\n");
 }
 
 /**
- * Build the prompt for `/agy:adversarial-review`. Same args as
- * buildReviewPrompt but with a different stance and ruleset.
+ * Build the prompt for `/agy:adversarial-review` (Design A+). Same
+ * staged-materials approach, different stance/ruleset.
  */
-export function buildAdversarialPrompt({ diffContext, focus }) {
+export function buildAdversarialPrompt({ diffContext, focus, stageDir, staged, omitted }) {
   const scopeBlurb =
     diffContext.scope === "branch"
       ? `Branch under challenge: HEAD vs merge-base of HEAD and \`${diffContext.base}\`.`
       : `Working-tree changes under challenge.`;
-  const focusBlock = focus
-    ? `\n\nWhere the user wants the most pressure:\n${focus.trim()}\n`
-    : "";
+  const focusBlock = focus ? `\n\nWhere the user wants the most pressure:\n${focus.trim()}` : "";
   return [
     PREAMBLE_ADVERSARIAL,
     "",
@@ -126,12 +102,7 @@ export function buildAdversarialPrompt({ diffContext, focus }) {
     "",
     scopeBlurb,
     focusBlock,
-    fullFilesBlock(diffContext),
-    "",
-    "Diff (with expanded context):",
-    "```diff",
-    diffContext.diff,
-    "```",
+    stagedMaterialsBlock(stageDir, staged, omitted),
     "",
   ].join("\n");
 }

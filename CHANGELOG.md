@@ -13,6 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.8] - 2026-05-30 (limeflash fork)
+
+Design A+ : the companion review path now stages the diff + full files
+to disk for agy to read, instead of cramming them into the argv prompt.
+Removes the command-line size ceiling entirely (a real run on a
+`+13,768 −1,725` diff was crashing/truncating before) and restores
+full-file context for arbitrarily large files.
+
+### Changed
+- **`/agy:review` / `/agy:adversarial-review` (companion) stage to
+  disk.** A throwaway temp dir gets `diff.patch` + `files/<relpath>`
+  (full current content of changed files, ≤2 MB each, symlinks/binaries/
+  out-of-repo paths skipped). The argv prompt only *points* at them, so
+  it stays tiny — **no more `ENAMETOOLONG`, no truncation, full context
+  on any size**. agy reads the staged copies; the real repo is never in
+  `--add-dir`, and agy runs with `cwd` = the stage dir (so it has no
+  handle to the repo). New `stageReviewMaterials` in `lib/git.mjs`;
+  prompt builders rewritten to reference the staged paths.
+- Verified live against real `agy` 1.0.3: a 305-line file with a change
+  ~300 lines away from its `gateway_id` definition — agy read the full
+  staged file, confirmed the definition, and reported no false positive
+  (the exact context-blind FP from earlier rounds).
+
+### Notes
+- The Bash `/agy:review` (no-flag working-tree path) still embeds +
+  byte-caps the prompt; for large reviews use the companion path
+  (`--base`, or any flag), which stages to disk.
+- Read-only posture (see SECURITY/README): on macOS/Linux/WSL the
+  `--sandbox` confines writes; on native Windows the guarantee is
+  practical (repo never exposed by path/env/cwd) — for OS-hard on
+  Windows, run under WSL.
+
 ## [0.5.7] - 2026-05-30 (limeflash fork)
 
 Fourth dogfood round converged on polish only (no new HIGH issues) —

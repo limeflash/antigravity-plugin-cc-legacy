@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Antigravity CLI integration for Claude Code — delegate tasks to Google's `agy` from inside your editor. Fork of simplybychris/antigravity-plugin-cc, extended toward feature parity with openai/codex-plugin-cc (background jobs, branch review, adversarial review, optional review gate).",
-    "version": "0.5.7"
+    "version": "0.5.8"
   },
   "plugins": [
     {
       "name": "agy",
       "description": "Use the Google Antigravity CLI (`agy`) from Claude Code. Synchronous Bash wrapper: /agy:setup, /agy:ask, /agy:delegate, /agy:research, /agy:review, /agy:image, /agy:help. Node.js companion for stateful workflows: /agy:rescue (background-capable), /agy:status, /agy:result, /agy:cancel. Per-call model selection via --model. Secret-scan guardrails. Roadmap: branch-base review, adversarial review.",
-      "version": "0.5.7",
+      "version": "0.5.8",
       "author": {
         "name": "limeflash",
         "url": "https://github.com/limeflash"

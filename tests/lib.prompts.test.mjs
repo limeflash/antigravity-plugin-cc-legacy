@@ -25,118 +25,82 @@ const BRANCH = {
   root: "/tmp/repo",
 };
 
-describe("buildReviewPrompt", () => {
+const STAGE = "/tmp/agy-review-xyz";
+const STAGED = ["bar.ts", "bar.test.ts"];
+
+describe("buildReviewPrompt (Design A+ staged)", () => {
   it("includes the preamble and rules", () => {
-    const p = buildReviewPrompt({ diffContext: WORKING_TREE });
+    const p = buildReviewPrompt({ diffContext: WORKING_TREE, stageDir: STAGE, staged: ["foo.js"] });
     expect(p).toContain(PROMPT_INTERNALS.PREAMBLE_REVIEW.slice(0, 30));
-    for (const rule of PROMPT_INTERNALS.REVIEW_RULES) {
-      expect(p).toContain(rule);
-    }
+    for (const rule of PROMPT_INTERNALS.REVIEW_RULES) expect(p).toContain(rule);
   });
 
-  it("renders the working-tree scope blurb", () => {
-    const p = buildReviewPrompt({ diffContext: WORKING_TREE });
-    expect(p).toMatch(/Working-tree review/);
-    expect(p).not.toMatch(/Branch review/);
+  it("renders the working-tree vs branch scope blurb", () => {
+    expect(buildReviewPrompt({ diffContext: WORKING_TREE, stageDir: STAGE, staged: [] }))
+      .toMatch(/Working-tree review/);
+    const b = buildReviewPrompt({ diffContext: BRANCH, stageDir: STAGE, staged: STAGED });
+    expect(b).toMatch(/Branch review/);
+    expect(b).toContain("`main`");
+    expect(b).toContain(BRANCH.mergeBase);
   });
 
-  it("renders the branch scope blurb with the base ref", () => {
-    const p = buildReviewPrompt({ diffContext: BRANCH });
-    expect(p).toMatch(/Branch review/);
-    expect(p).toContain("`main`");
-    expect(p).toContain(BRANCH.mergeBase);
-  });
-
-  it("lists touched files when present", () => {
-    const p = buildReviewPrompt({ diffContext: BRANCH });
-    expect(p).toContain("Files touched (2):");
+  it("points at the staged diff and files instead of embedding them", () => {
+    const p = buildReviewPrompt({ diffContext: BRANCH, stageDir: STAGE, staged: STAGED });
+    expect(p).toContain(`${STAGE}/diff.patch`);
+    expect(p).toContain(`${STAGE}/files`);
     expect(p).toContain("- bar.ts");
     expect(p).toContain("- bar.test.ts");
+    // The diff CONTENT must NOT be embedded (that was the ENAMETOOLONG source).
+    expect(p).not.toContain("function add(a, b)");
+    expect(p).not.toContain("```diff");
   });
 
-  it("inserts the focus block when focus is non-empty", () => {
+  it("notes omitted files and tells agy to mark cross-context concerns UNVERIFIED", () => {
     const p = buildReviewPrompt({
-      diffContext: WORKING_TREE,
-      focus: "focus on error handling",
+      diffContext: BRANCH,
+      stageDir: STAGE,
+      staged: ["bar.ts"],
+      omitted: [{ path: "huge.bin", reason: "binary" }],
     });
-    expect(p).toContain("User focus");
-    expect(p).toContain("focus on error handling");
+    expect(p).toContain("huge.bin");
+    expect(p).toMatch(/UNVERIFIED/);
   });
 
-  it("omits the focus block when focus is empty / missing", () => {
-    const p = buildReviewPrompt({ diffContext: WORKING_TREE, focus: "" });
-    expect(p).not.toContain("User focus");
-  });
-
-  it("embeds the diff inside a ```diff fence", () => {
-    const p = buildReviewPrompt({ diffContext: WORKING_TREE });
-    expect(p).toContain("```diff\n");
-    expect(p).toContain("+const x = 1;");
-    expect(p).toContain("```\n");
+  it("focus block present only when focus is non-empty", () => {
+    expect(buildReviewPrompt({ diffContext: WORKING_TREE, stageDir: STAGE, staged: [], focus: "error handling" }))
+      .toContain("error handling");
+    expect(buildReviewPrompt({ diffContext: WORKING_TREE, stageDir: STAGE, staged: [], focus: "" }))
+      .not.toContain("User focus");
   });
 });
 
-describe("buildAdversarialPrompt", () => {
-  it("uses the adversarial preamble (NOT the review one)", () => {
-    const p = buildAdversarialPrompt({ diffContext: WORKING_TREE });
+describe("buildAdversarialPrompt (Design A+ staged)", () => {
+  it("uses the adversarial preamble + rules, not the review ones", () => {
+    const p = buildAdversarialPrompt({ diffContext: WORKING_TREE, stageDir: STAGE, staged: [] });
     expect(p).toContain(PROMPT_INTERNALS.PREAMBLE_ADVERSARIAL.slice(0, 30));
     expect(p).not.toContain(PROMPT_INTERNALS.PREAMBLE_REVIEW.slice(0, 30));
-  });
-
-  it("includes the adversarial rules (not the review ones)", () => {
-    const p = buildAdversarialPrompt({ diffContext: WORKING_TREE });
-    for (const rule of PROMPT_INTERNALS.ADVERSARIAL_RULES) {
-      expect(p).toContain(rule);
-    }
-    // The review-specific 'group findings under Correctness…' rule
-    // is review-only.
+    for (const rule of PROMPT_INTERNALS.ADVERSARIAL_RULES) expect(p).toContain(rule);
     expect(p).not.toContain(PROMPT_INTERNALS.REVIEW_RULES[0]);
   });
 
-  it("frames the user-focus block as 'where to apply pressure'", () => {
+  it("also points at staged materials and frames focus as pressure", () => {
     const p = buildAdversarialPrompt({
       diffContext: BRANCH,
+      stageDir: STAGE,
+      staged: STAGED,
       focus: "the retry/backoff design",
     });
+    expect(p).toContain(`${STAGE}/diff.patch`);
     expect(p).toMatch(/pressure/i);
     expect(p).toContain("the retry/backoff design");
   });
-});
 
-describe("full-file context block", () => {
-  const ctxWithFiles = {
-    ...WORKING_TREE,
-    fullFiles: [{ path: "foo.js", content: "import x from 'x';\nconst y = 1;\n" }],
-    omittedFiles: [{ path: "huge.js", reason: "too large (900 lines)" }],
-  };
-
-  it("review prompt includes full file content when present", () => {
-    const p = buildReviewPrompt({ diffContext: ctxWithFiles });
-    expect(p).toContain("Full current content of the changed files");
-    expect(p).toContain("### foo.js");
-    expect(p).toContain("import x from 'x';");
-    expect(p).toContain("huge.js"); // omitted note
-  });
-
-  it("review prompt has no full-file section when fullFiles empty", () => {
-    const p = buildReviewPrompt({ diffContext: { ...WORKING_TREE, fullFiles: [] } });
-    expect(p).not.toContain("Full current content of the changed files");
-  });
-
-  it("adversarial prompt also includes full file content", () => {
-    const p = buildAdversarialPrompt({ diffContext: ctxWithFiles });
-    expect(p).toContain("### foo.js");
-  });
-});
-
-describe("dynamic backtick fence", () => {
-  it("uses a fence longer than any backtick run inside the file", () => {
-    const ctx = {
-      ...WORKING_TREE,
-      fullFiles: [{ path: "doc.md", content: "before\n````\ncode\n````\nafter\n" }],
-    };
-    const p = buildReviewPrompt({ diffContext: ctx });
-    // file has a 4-backtick run, so the fence must be >=5 backticks
-    expect(p).toContain("`````md");
+  it("uses Windows-style separators when stageDir is a Windows path", () => {
+    const p = buildReviewPrompt({
+      diffContext: WORKING_TREE,
+      stageDir: "C:\\Temp\\agy-review-xyz",
+      staged: ["foo.js"],
+    });
+    expect(p).toContain("C:\\Temp\\agy-review-xyz\\diff.patch");
   });
 });

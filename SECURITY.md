@@ -1,5 +1,40 @@
 # Security Policy
 
+## The `--dangerously-skip-permissions` tradeoff and read-only posture
+
+`agy` 1.0.3 returns nothing from `--print` in a non-TTY context (issue
+#76), so the plugin can only get output by having `agy` `write_file`
+its answer to a temp file — which requires `--dangerously-skip-permissions`
+(auto-approve). That flag is therefore unavoidable, not a choice. We
+scope its blast radius rather than auto-approve everything globally:
+
+| Command | `agy` write access | Real repo exposure |
+|---|---|---|
+| `/agy:ask`, `/agy:image` | temp dir only | none |
+| `/agy:review`, `/agy:adversarial-review` | temp **stage** dir only (diff + file copies live there; `cwd` = stage dir) | **none** — repo is never in `--add-dir`, path, env, or cwd |
+| `/agy:rescue` | the repo (by design — it's a delegated coding task) | mitigated by clean-tree guard, post-run diff, and `--isolate` worktree mode |
+
+**Honest guarantee levels for the read-only commands:**
+
+- **macOS / Linux / WSL:** OS-enforced. `agy --sandbox` uses
+  seatbelt/bubblewrap to confine writes to the workspace, and the
+  workspace is a throwaway temp dir.
+- **Native Windows (git-bash):** *very strong practical*, **not**
+  OS-hard. There is no lightweight, no-admin, dependency-free OS
+  sandbox on Windows (`icacls`/`attrib` are reversible by the same
+  user and were deliberately **not** used — they'd be security
+  theater and risk leaving your repo locked on a crash). The repo is
+  never handed to `agy` by path, env, or cwd, so under normal
+  operation it is unreachable — but a deliberately hostile prompt
+  injection that runs a shell command with a hardcoded absolute path
+  is not OS-blocked. **For an OS-hard guarantee on Windows, run under
+  WSL.**
+
+This analysis was itself pressure-tested by asking `agy` (see the
+project history); `icacls`/`attrib`/Job-Objects were rejected as
+non-enforcing, AppContainer/Low-Integrity as impractical for a CLI,
+and WSL identified as the only robust no-admin path on Windows.
+
 ## Reporting a vulnerability
 
 If you find a security issue in this plugin (the plugin source — **not** in

@@ -272,3 +272,57 @@ describe("gatherFileContext — directory-symlink containment", () => {
     await fsp.rm(outside, { recursive: true, force: true });
   });
 });
+
+describe("stageReviewMaterials (Design A+)", () => {
+  it("writes diff.patch and full file content under files/", async () => {
+    const { stageReviewMaterials } = await import("../plugins/agy/scripts/lib/git.mjs");
+    await fsp.writeFile(path.join(repo, "a.js"), "export const a = 1;\n");
+    await fsp.mkdir(path.join(repo, "sub"), { recursive: true });
+    await fsp.writeFile(path.join(repo, "sub", "b.js"), "export const b = 2;\n");
+    const stage = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-stage-"));
+    try {
+      const r = await stageReviewMaterials(stage, repo, ["a.js", "sub/b.js"], "DIFFTEXT");
+      expect(r.staged.sort()).toEqual(["a.js", "sub/b.js"]);
+      expect(await fsp.readFile(path.join(stage, "diff.patch"), "utf8")).toBe("DIFFTEXT");
+      expect(await fsp.readFile(path.join(stage, "files", "a.js"), "utf8")).toContain("const a = 1");
+      expect(await fsp.readFile(path.join(stage, "files", "sub", "b.js"), "utf8")).toContain("const b = 2");
+    } finally {
+      await fsp.rm(stage, { recursive: true, force: true });
+    }
+  });
+
+  it("skips symlinks, binaries, and missing files (omitted with reasons)", async () => {
+    const { stageReviewMaterials } = await import("../plugins/agy/scripts/lib/git.mjs");
+    await fsp.writeFile(path.join(repo, "bin.dat"), Buffer.from([0x41, 0x00, 0x42]));
+    const stage = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-stage-"));
+    try {
+      const r = await stageReviewMaterials(stage, repo, ["bin.dat", "ghost.js"], "d");
+      expect(r.staged).toEqual([]);
+      const reasons = Object.fromEntries(r.omitted.map((o) => [o.path, o.reason]));
+      expect(reasons["bin.dat"]).toBe("binary");
+      expect(reasons["ghost.js"]).toMatch(/missing/);
+    } finally {
+      await fsp.rm(stage, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a symlinked file out of the repo", async () => {
+    const { stageReviewMaterials } = await import("../plugins/agy/scripts/lib/git.mjs");
+    const outside = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-out-"));
+    await fsp.writeFile(path.join(outside, "secret.txt"), "SECRET\n");
+    const link = path.join(repo, "link.txt");
+    let madeLink = true;
+    try { await fsp.symlink(path.join(outside, "secret.txt"), link); } catch { madeLink = false; }
+    const stage = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-stage-"));
+    try {
+      if (madeLink) {
+        const r = await stageReviewMaterials(stage, repo, ["link.txt"], "d");
+        expect(r.staged).toEqual([]);
+        await expect(fsp.access(path.join(stage, "files", "link.txt"))).rejects.toThrow();
+      }
+    } finally {
+      await fsp.rm(stage, { recursive: true, force: true });
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
