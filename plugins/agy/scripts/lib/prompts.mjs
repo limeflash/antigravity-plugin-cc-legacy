@@ -28,6 +28,16 @@ function joinRules(rules) {
   return rules.map((r, i) => `${i + 1}. ${r}`).join("\n");
 }
 
+// Longest run of consecutive backticks in `s` (>=3 only — shorter runs
+// don't threaten a fence). Used to size a code fence that can't be
+// closed early by the content itself.
+function longestBacktickRun(s) {
+  let max = 2; // so fence is at least 3
+  const m = s.match(/`+/g);
+  if (m) for (const run of m) if (run.length > max) max = run.length;
+  return max;
+}
+
 // Render the full-file-context block. Giving the reviewer whole files
 // (not just diff hunks) is what kills false positives like "X is not
 // imported" or "missing guard" — the import / guard is usually just
@@ -41,13 +51,14 @@ function fullFilesBlock(diffContext) {
   ];
   for (const f of files) {
     const ext = (f.path.split(".").pop() || "").toLowerCase();
-    // Use a 4-backtick fence so files that themselves contain triple
-    // backticks (markdown, JS template strings) don't terminate the
-    // block early and corrupt the prompt structure.
+    // Dynamic fence: use one more backtick than the longest backtick
+    // run in the file, so content that itself contains ``` or ```` (this
+    // plugin's own prompts.mjs does!) can't terminate the block early.
+    const fence = "`".repeat(longestBacktickRun(f.content) + 1);
     parts.push(`\n### ${f.path}`);
-    parts.push("````" + ext);
+    parts.push(fence + ext);
     parts.push(f.content.replace(/\n$/, ""));
-    parts.push("````");
+    parts.push(fence);
   }
   const omitted = diffContext.omittedFiles ?? [];
   const tooBig = omitted.filter((o) => /too large|budget/.test(o.reason));

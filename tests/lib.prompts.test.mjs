@@ -128,3 +128,15 @@ describe("full-file context block", () => {
     expect(p).toContain("### foo.js");
   });
 });
+
+describe("dynamic backtick fence", () => {
+  it("uses a fence longer than any backtick run inside the file", () => {
+    const ctx = {
+      ...WORKING_TREE,
+      fullFiles: [{ path: "doc.md", content: "before\n````\ncode\n````\nafter\n" }],
+    };
+    const p = buildReviewPrompt({ diffContext: ctx });
+    // file has a 4-backtick run, so the fence must be >=5 backticks
+    expect(p).toContain("`````md");
+  });
+});

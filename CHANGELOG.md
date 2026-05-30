@@ -13,6 +13,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.5.6] - 2026-05-30 (limeflash fork)
+
+Third dogfood round (an adversarial self-review of 0.5.5). Fixed the
+legitimate findings; the rest were accepted tradeoffs or refuted.
+
+### Fixed
+- **Directory-symlink traversal.** The 0.5.5 symlink check only looked
+  at the leaf, so `linked_dir/file.txt` (where `linked_dir` →
+  `/etc`) still escaped. `gatherFileContext` now `realpath`-resolves
+  and requires the result to stay inside the repo root; the Bash
+  wrapper does the same with `realpath` + a prefix check.
+- **Byte-accurate prompt cap in Bash.** The cap used `${#prompt}` /
+  `${prompt:0:N}` (character counts), so multibyte UTF-8 (CJK, emoji)
+  could still exceed the byte limit and crash. Now uses `wc -c` /
+  `head -c` (byte-accurate in any locale). Env var renamed
+  `AGY_PROMPT_MAX_CHARS` → `AGY_PROMPT_MAX_BYTES`.
+- **Fine-grained GitHub PAT detection.** Added the
+  `github_pat_…` (82-char) pattern the classic `ghp_…` regex missed.
+- **Dynamic code fences.** Embedded file content is now fenced with
+  one more backtick than the longest backtick run in the file (was a
+  fixed 4), so a file containing ```` ```` ```` (this plugin's own
+  prompts.mjs does) can't close the block early. Both companion and
+  Bash wrapper.
+
+### Considered and not changed
+- Inline-credential regex flags some benign code
+  (`const secret = getSecretFromVault()`) — accepted: best-effort
+  guardrail, `AGY_REVIEW_ALLOW_SECRETS=1` is the escape hatch.
+- "Pass the prompt via a file instead of argv" — not possible: `agy`
+  1.0.3 `--print` requires the prompt as an argv value (verified; it
+  rejects stdin/empty-arg). The cap is the only mitigation.
+
+189 vitest pass.
+
 ## [0.5.5] - 2026-05-30 (limeflash fork)
 
 Dogfooding pass: ran the plugin's own `/agy:review` on the plugin's

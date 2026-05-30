@@ -58,3 +58,10 @@ describe("scanDiffForSecrets — case-insensitivity (parity with grep -i)", () =
     ).toContain("GitHub personal access token");
   });
 });
+
+describe("scanDiffForSecrets — fine-grained GitHub PAT", () => {
+  it("detects github_pat_ tokens", () => {
+    const tok = "github_pat_" + "A".repeat(82);
+    expect(scanDiffForSecrets(`+token = "${tok}"`)).toContain("GitHub fine-grained PAT");
+  });
+});

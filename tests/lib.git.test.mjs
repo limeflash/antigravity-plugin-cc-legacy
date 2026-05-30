@@ -255,3 +255,20 @@ describe("gatherFileContext — safety edges (symlink, pre-read size)", () => {
     expect(r.omitted[0].reason).toMatch(/too large \(\d+ bytes\)/);
   });
 });
+
+describe("gatherFileContext — directory-symlink containment", () => {
+  it("skips a file reached through a symlinked directory pointing outside the repo", async () => {
+    const outside = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-out-"));
+    await fsp.writeFile(path.join(outside, "secret.txt"), "TOPSECRET\n");
+    const linkdir = path.join(repo, "linkdir");
+    try {
+      await fsp.symlink(outside, linkdir, "dir");
+    } catch {
+      return; // no symlink privilege (Windows) — skip
+    }
+    const r = await gatherFileContext(repo, ["linkdir/secret.txt"]);
+    expect(r.included).toEqual([]);
+    expect(r.omitted[0].reason).toMatch(/outside the repo|symlink/);
+    await fsp.rm(outside, { recursive: true, force: true });
+  });
+});

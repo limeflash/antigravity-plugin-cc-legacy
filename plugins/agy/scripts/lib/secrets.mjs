@@ -13,6 +13,7 @@ const PATTERNS = [
   [/AKIA[0-9A-Z]{16}/i, "AWS access key"],
   [/ASIA[0-9A-Z]{16}/i, "AWS STS token"],
   [/gh[pousr]_[A-Za-z0-9]{36,}/i, "GitHub personal access token"],
+  [/github_pat_[A-Za-z0-9_]{40,}/i, "GitHub fine-grained PAT"],
   [/xox[baprs]-[A-Za-z0-9-]{10,}/i, "Slack token"],
   [/sk-[A-Za-z0-9]{20,}/i, "OpenAI/Anthropic-style API key"],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/i, "PEM private key block"],

@@ -189,6 +189,22 @@ export async function gatherFileContext(root, files, opts = {}) {
       omitted.push({ path: rel, reason: "not a regular file" });
       continue;
     }
+    // Defend against DIRECTORY-symlink traversal: lstat only checks the
+    // leaf, so `linked_dir/file.txt` where linked_dir -> /etc would slip
+    // through. Resolve the real path and require it to stay inside the
+    // repo root.
+    try {
+      const realAbs = await fsp.realpath(abs);
+      const realRoot = await fsp.realpath(root);
+      const within = path.relative(realRoot, realAbs);
+      if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+        omitted.push({ path: rel, reason: "resolves outside the repo (symlink?)" });
+        continue;
+      }
+    } catch {
+      omitted.push({ path: rel, reason: "unresolvable path" });
+      continue;
+    }
     // Size check BEFORE reading, so a giant generated/blob file can't
     // be slurped into memory (OOM) just to be rejected afterward.
     if (st.size > budget - used) {
