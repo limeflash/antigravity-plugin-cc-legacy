@@ -76,10 +76,13 @@ default deadline), and `--model <alias>` (per-call model selection).
   base ref so unrelated changes that landed on the base since you
   branched are excluded. If there's no diff between branches, the
   companion exits 1 with a clear message.
-- **Background** runs are detached Node workers; the companion does
-  NOT auto-approve agy's tool calls. If agy needs to read/edit
-  files, it will prompt and the background job will stall until
-  canceled.
+- **Read-only by construction.** Review runs `agy` under `--sandbox`
+  with **no** `--dangerously-skip-permissions`: it reads the staged diff
+  and file copies with read-only tools (which need no approval) and can
+  write nowhere near your repo. The answer is recovered from agy's own
+  on-disk transcript (the agy issue #76 capture). **Background** runs are
+  detached Node workers and complete unattended for the same reason —
+  there's no write prompt to stall on.
 - Both backends quote the user's focus text as one shell-safe
   argument before forwarding.
 

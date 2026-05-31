@@ -227,28 +227,35 @@ Claude Code  →  /agy:*  →  agy-run.sh (Bash)        →  agy --print "<promp
   ([`agy-companion.mjs`](./plugins/agy/scripts/agy-companion.mjs))
   handles the stateful ones (background jobs, branch review).
 
-### Why output goes through `write_file` (agy issue #76)
+### How output is captured (agy issue #76)
 
 On `agy` 1.0.3, `agy --print` flushes **zero bytes to a non-TTY
 stdout** — the response is generated (`Drip stopped: length=N` in the
 log) but the "drip" writer only targets a real terminal. Since the
 plugin always runs `agy` from a subprocess, capturing stdout returns
 nothing. (`agy --print` also *hangs* on a non-TTY stdin that never
-EOFs.)
+EOFs, so the plugin always closes stdin.)
 
-The only reliable headless path is to instruct `agy` **in the prompt**
-to write its answer to a temp file via the `write_file` tool, then read
-that file back. `write_file` needs auto-approval, so the plugin passes
-`--dangerously-skip-permissions` — but scopes the blast radius:
+The read-only commands work around this **without** auto-approval. `agy`
+persists its own conversation transcript to disk on every `--print` run —
+with no tool permission required — so:
 
-- read-only commands (`/agy:ask`, `/agy:review`, `/agy:adversarial-review`)
-  run with `--sandbox` and `--add-dir` limited to a throwaway temp dir;
-- `/agy:rescue` (a delegated coding task) gets repo write access by
-  design, mitigated by the clean-tree guard, the post-run diff, and
-  `--isolate` worktree mode.
+- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review`** run with
+  `--sandbox` and **no** `--dangerously-skip-permissions`, then read the
+  answer back from `agy`'s transcript
+  (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`, located via
+  the run's own `--log-file`). `agy`'s read-only tools (`list_dir` /
+  `view_file`) execute without approval; it is never granted write access
+  or the repo. (If `node` isn't available, `/agy:ask` falls back to the
+  scoped `write_file` path below.)
+- **`/agy:rescue`** edits files by design, and **`/agy:image`** saves a
+  generated image, so they keep the `write_file` +
+  `--dangerously-skip-permissions` path, scoped to a throwaway temp dir.
+  `rescue`'s repo writes are guarded by the clean-tree check, the post-run
+  diff, and `--isolate` worktree mode.
 
-If/when Google fixes #76 so `--print` flushes to a pipe, the plugin can
-drop the `write_file` dance and the auto-approve requirement.
+See [SECURITY.md](./SECURITY.md) for the full posture and the honest
+per-platform guarantee levels.
 
 ## Configuration
 
@@ -311,8 +318,9 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
   - [x] `/agy:review --base <ref>` for branch review (merge-base
         resolution + expanded `-U25` + full-file context).
   - [x] `/agy:adversarial-review` (challenge-mode review).
-  - [x] `agy` #76 write_file workaround + non-TTY stdin-hang fix +
-        prompt-size cap — validated against real `agy` 1.0.3.
+  - [x] `agy` #76 capture: read-only **transcript capture** (no
+        auto-approve) for ask/review/adversarial + `write_file` fallback +
+        non-TTY stdin-hang fix — validated against real `agy` 1.0.3.
   - [x] `/agy:rescue` safety rails: clean-tree guard, post-run diff,
         `--isolate` worktree mode.
   - [x] Secret-scan guardrails (Bash + companion parity).
@@ -334,15 +342,13 @@ which is itself inspired by
 [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc).
 
 The goal is to keep the security posture as tight as `agy` allows while
-reaching the codex-plugin-cc feature surface. One unavoidable
-compromise: `agy` 1.0.3 returns no output from `--print` in a
-non-TTY context (issue #76), so getting any answer headless requires
-the `write_file` workaround and therefore `--dangerously-skip-permissions`
-(see [How it works](#why-output-goes-through-write_file-agy-issue-76)).
-Rather than auto-approve everything globally, the fork scopes it:
-`--sandbox` + temp-only write access for read-only commands, and
-worktree isolation (`--isolate`) for the one write-capable command
-(`/agy:rescue`).
+reaching the codex-plugin-cc feature surface. `agy` 1.0.3 returns no output
+from `--print` in a non-TTY context (issue #76); the read-only commands
+work around this by reading `agy`'s own on-disk transcript, so they need
+**no** auto-approval (see [How output is captured](#how-output-is-captured-agy-issue-76)).
+The only commands that auto-approve are the write-capable ones
+(`/agy:rescue`, `/agy:image`), scoped to a temp dir and — for `rescue` —
+guarded by `--isolate` worktree mode.
 
 ## License
 

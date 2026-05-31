@@ -18,6 +18,7 @@ import {
 } from "./state.mjs";
 import { ensureDir, writeAtomic, nowIso } from "./fs.mjs";
 import { processAlive, terminate } from "./process.mjs";
+import { captureAnswer } from "./transcript.mjs";
 
 const COMPANION_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -191,27 +192,26 @@ export async function runJobWorker(workspaceRoot, jobId, opts = {}) {
 }
 
 /**
- * The default agy invocation strategy.
+ * The default agy invocation strategy. Dispatches by job kind:
  *
- * Works around agy issue #76: `agy --print` flushes ZERO bytes to a
- * non-TTY stdout (the response is generated but the "drip" writer only
- * targets a real terminal). Since the companion always runs agy from a
- * subprocess, capturing stdout returns nothing. Instead we instruct agy
- * in the prompt to write its full answer to a temp file via write_file,
- * then read that file and emit it through `sink` (so it lands in the job
- * log / terminal).
+ *   - review / adversarial-review (read-only) → runReviewViaTranscript:
+ *     run agy under --sandbox with the staged materials in --add-dir, with
+ *     NO write_file injection and NO --dangerously-skip-permissions, then
+ *     read the answer back from agy's own on-disk transcript
+ *     (lib/transcript.mjs). Genuinely read-only — agy's read-only tools
+ *     run without approval, and it never gets repo or write access.
  *
- * write_file needs auto-approval → --dangerously-skip-permissions. Blast
- * radius is scoped:
- *   - stdin is ignored (=/dev/null) so agy can't hang on a non-TTY stdin
- *     (the other half of #76).
- *   - read-only kinds (review / adversarial-review) get --sandbox and
- *     --add-dir ONLY the temp dir — agy can't touch the repo.
- *   - rescue is write-capable by design (it's a delegated coding task),
- *     so it also gets --add-dir <workspaceRoot>. It is NOT sandboxed,
- *     matching the "hand the task to another agent" intent.
+ *   - rescue (write-capable) → the write_file path below: agy edits files
+ *     for real, so it needs auto-approval (--dangerously-skip-permissions)
+ *     and writes its answer to a temp file we read back. Safety comes from
+ *     cmdRescue's guards (clean-tree refusal / --isolate worktree), not
+ *     from sandboxing.
  *
- * Returns the agy exit code.
+ * Both paths work around agy issue #76: `agy --print` flushes ZERO bytes
+ * to a non-TTY stdout (the response is generated but the "drip" writer
+ * only targets a real terminal), and stdin is ignored (=/dev/null) so agy
+ * can't hang on a non-TTY stdin. Returns the agy exit code (0 = a usable
+ * answer was captured).
  */
 // Max bytes for the prompt argv entry. Windows' CreateProcess caps the
 // whole command line at 32767 chars; leave generous margin for the exe
@@ -250,6 +250,18 @@ async function defaultAgyRunner(record, { sink } = {}) {
     throw new Error("defaultAgyRunner: record has no meta.prompt");
   }
   const agyBin = meta?.agyBin ?? "agy";
+
+  // Read-only review commands capture output from agy's OWN on-disk
+  // transcript — no write_file injection, no --dangerously-skip-permissions
+  // (see lib/transcript.mjs + runReviewViaTranscript below). agy's read-only
+  // tools (list_dir/view_file) run without approval, so it reads the staged
+  // materials under --sandbox while never being able to write to the repo.
+  // rescue falls through to the write-capable path: it legitimately edits
+  // files, so it keeps write_file + --dangerously-skip-permissions, gated by
+  // cmdRescue's clean-tree / --isolate guards.
+  if (record.kind === "review" || record.kind === "adversarial-review") {
+    return runReviewViaTranscript(record, { emit });
+  }
 
   // Design A+ : review commands stage the diff + full files into a
   // stageDir they own and pass it via meta.stageDir. We run agy IN that
@@ -335,6 +347,83 @@ async function defaultAgyRunner(record, { sink } = {}) {
 }
 
 /**
+ * Read-only capture path for review / adversarial-review.
+ *
+ * Runs `agy --print` under --sandbox with ONLY the staged materials in
+ * --add-dir and NO --dangerously-skip-permissions, then recovers the
+ * model's answer from agy's own conversation transcript on disk (see
+ * lib/transcript.mjs). This removes both crutches for the read-only
+ * commands: no write_file in the prompt, no auto-approve. agy's read-only
+ * tools (list_dir/view_file) execute without approval, so it can read the
+ * staged diff/files; it cannot write anywhere the repo lives.
+ *
+ * Returns 0 when a non-empty answer was captured; otherwise agy's exit
+ * code (or 1). The captured answer is the success signal, not the exit
+ * code (agy's --print code is unreliable — see issue #76).
+ */
+async function runReviewViaTranscript(record, { emit }) {
+  const meta = record.meta ?? {};
+  const agyBin = meta.agyBin ?? "agy";
+  const prompt = meta.prompt;
+
+  // review always stages to meta.stageDir; tolerate a missing one by
+  // making a throwaway dir so the function is still usable standalone.
+  const stageDir =
+    meta.stageDir ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "agy-job-")));
+  const logFile = path.join(stageDir, "agy-run.log");
+
+  // --sandbox restricts terminal/shell tools where the OS supports it;
+  // --add-dir grants read access to the staged diff/files only (the repo
+  // is never added); --log-file lets us recover the conversation id and
+  // thus the transcript, race-free.
+  const args = ["--sandbox", "--add-dir", stageDir, "--log-file", logFile];
+  args.push(...(record.args ?? []));
+  args.push("--print", prompt);
+
+  const code = await new Promise((resolve) => {
+    const child = spawn(agyBin, args, {
+      // stdin ignored to dodge the non-TTY hang; stdout ignored because
+      // #76 leaves it empty (we read the transcript instead); stderr piped
+      // so real agy errors still surface in the log.
+      stdio: ["ignore", "ignore", "pipe"],
+      cwd: stageDir,
+    });
+    child.stderr.on("data", (chunk) => emit(chunk.toString()));
+    child.on("error", (err) => {
+      emit(`[agy-job ${record.id}] spawn error: ${err.message}\n`);
+      resolve(127);
+    });
+    child.on("close", (c) => resolve(c ?? 0));
+  });
+
+  let produced = false;
+  try {
+    const { answer, conversationId } = await captureAnswer({
+      logFile,
+      cwd: stageDir,
+    });
+    if (answer && answer.trim()) {
+      emit(answer.endsWith("\n") ? answer : answer + "\n");
+      produced = true;
+    } else {
+      emit(
+        `[agy-job ${record.id}] no answer captured from agy's transcript ` +
+          `(conversationId=${conversationId ?? "?"}). agy may have timed out ` +
+          `or been interrupted; see the run log at ${logFile}.\n`,
+      );
+    }
+  } finally {
+    // The worker is the last reader of the stage dir, so clean it here —
+    // this also closes the background-review temp leak (the detached
+    // worker, not the already-returned parent, owns teardown).
+    // runReviewCommand's own cleanup is then an idempotent no-op.
+    await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+  }
+  if (produced) return 0;
+  return code === 0 ? 1 : code;
+}
+
+/**
  * Cancel a job. Idempotent: returns immediately if the job is already
  * finished. Updates the record to `canceled` on success.
  */
@@ -361,6 +450,11 @@ export async function cancelJob(workspaceRoot, jobId, { graceMs = 5000 } = {}) {
     exitCode: null,
   });
   try { await fsp.rm(jobPidPath(workspaceRoot, jobId)); } catch { /* ok */ }
+  // A killed worker's finally{} never runs, so the review stage dir would
+  // leak. Clean it up best-effort here (it lives under the OS temp dir).
+  if (record.meta?.stageDir) {
+    await fsp.rm(record.meta.stageDir, { recursive: true, force: true }).catch(() => {});
+  }
   return { canceled: true, reason: wasAlive ? "killed" : "already-dead" };
 }
 

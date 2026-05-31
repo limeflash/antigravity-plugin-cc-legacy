@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# Directory this script lives in, so we can locate sibling lib/ helpers
+# (lib/transcript.mjs powers the read-only issue-#76 output capture).
+AGY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGY_LIB_DIR="$AGY_SCRIPT_DIR/lib"
+
 AGY_SETTINGS_FILE="${HOME}/.gemini/antigravity-cli/settings.json"
 AGY_SETTINGS_LOCKDIR="${HOME}/.gemini/antigravity-cli/.agy-plugin.lock"
 AGY_SETTINGS_BACKUP="${HOME}/.gemini/antigravity-cli/settings.json.agy-plugin.bak"
@@ -363,31 +368,132 @@ with_model_override() {
 }
 
 # ---------------------------------------------------------------------------
-# agy issue #76 workaround.
+# agy issue #76 output capture.
 #
-# `agy --print`, when stdout is NOT a TTY (i.e. any time the plugin runs
-# it from a subprocess / agent Bash tool), generates the response
-# internally but flushes ZERO bytes to stdout — the "drip" typewriter
-# writer only targets a real terminal. Confirmed on agy 1.0.3:
-# `Drip stopped: length=N` in the log while stdout stays empty. Capturing
-# stdout therefore returns nothing in the plugin's actual usage context.
+# `agy --print`, when stdout is NOT a TTY (any time the plugin runs it from
+# a subprocess / agent Bash tool), generates the response internally but
+# flushes ZERO bytes to stdout — the "drip" typewriter only targets a real
+# terminal. Confirmed on agy 1.0.3: `Drip stopped: length=N` in the log
+# while stdout stays empty. Separately, `agy --print` blocks forever on a
+# non-TTY stdin that never reaches EOF, so we always close stdin
+# (</dev/null).
 #
-# Separately, `agy --print` blocks forever on a non-TTY stdin that never
-# reaches EOF (it ignores --print-timeout in that state).
+# PRIMARY path (_agy_capture): agy persists its OWN conversation transcript
+# to disk on every --print run — with NO tool permission and NO
+# auto-approve. So we run agy strictly READ-ONLY (--sandbox, --add-dir only
+# a throwaway temp dir, --log-file so we can recover the conversation id)
+# and read the model's answer back from that transcript via
+# lib/transcript.mjs. No write_file, no --dangerously-skip-permissions.
 #
-# The only reliable headless path is to instruct agy IN THE PROMPT to
-# write its full answer to a file via the write_file tool, then read that
-# file. write_file needs auto-approval, so we pass
-# --dangerously-skip-permissions, but scope the blast radius:
-#   - --sandbox          keeps terminal/shell tool use restricted
-#   - --add-dir <tmpdir> grants write access ONLY to a throwaway temp dir
-#   - </dev/null         closes stdin so agy can't hang on it
+# FALLBACK path (_agy_capture_writefile): only when `node` is unavailable
+# (the transcript is JSONL, parsed with node). Reverts to instructing agy
+# to write_file its answer under --dangerously-skip-permissions, scoped to
+# a throwaway temp dir. Kept so /agy:ask still works without node.
 #
 # Usage: _agy_capture <agy> <canonical-model-or-empty> <timeout> <prompt> [extra agy args...]
-# Prints the response on success (rc 0); prints an error and rc 1 if the
-# response file came back empty.
+# Prints the response on success (rc 0); prints an error and rc 1 otherwise.
 # ---------------------------------------------------------------------------
 _agy_capture() {
+  local agy="$1" canonical="$2" timeout="$3" prompt="$4"
+  shift 4
+
+  # The transcript is JSONL; we parse it with node. Without node, fall back
+  # to the write_file capture so /agy:ask still works everywhere.
+  if ! command -v node >/dev/null 2>&1; then
+    _agy_capture_writefile "$agy" "$canonical" "$timeout" "$prompt" "$@"
+    return $?
+  fi
+
+  local outdir
+  outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
+  local logfile="$outdir/agy-run.log"
+  # agy may be a Windows .exe invoked from Git Bash, which needs native
+  # Windows paths for --add-dir and --log-file.
+  # cwd_arg is the directory agy actually runs in ($PWD — we never cd), so
+  # it's the workspace key agy registers in last_conversations.json; pass it
+  # as the transcript fallback hint.
+  local target_dir logfile_arg cwd_arg
+  if command -v cygpath >/dev/null 2>&1; then
+    target_dir="$(cygpath -w "$outdir")"
+    logfile_arg="$(cygpath -w "$logfile")"
+    cwd_arg="$(cygpath -w "$PWD")"
+  else
+    target_dir="$outdir"
+    logfile_arg="$logfile"
+    cwd_arg="$PWD"
+  fi
+
+  # agy --print takes the whole prompt as ONE argv entry, so it must stay
+  # under the OS command-line limit (~32 KB on Windows) or the process
+  # fails with ENAMETOOLONG. Cap by BYTES (multibyte-safe via wc -c/head -c).
+  # No write_file suffix now, so the whole budget is the prompt body.
+  local max_body="${AGY_PROMPT_MAX_BYTES:-30000}"
+  local prompt_bytes; prompt_bytes="$(printf '%s' "$prompt" | wc -c)"
+  if [ "$prompt_bytes" -gt "$max_body" ]; then
+    prompt="$(printf '%s' "$prompt" | head -c "$max_body" || true)"$'\n\n[...content truncated to fit the OS command-line length limit; some context was omitted...]'
+  fi
+
+  # Per-call model override decision (unchanged): agy 1.0.x has no top-level
+  # "model" key until the user sets one in the TUI, so degrade gracefully
+  # rather than hard-fail.
+  local use_override=0
+  if [ -n "$canonical" ]; then
+    if [ -f "$AGY_SETTINGS_FILE" ] && grep -q '"model"' "$AGY_SETTINGS_FILE" 2>/dev/null; then
+      use_override=1
+    else
+      echo "[wrapper] note: --model requested, but agy's settings.json has no \"model\" field to patch on this version; using the current default model instead. (Set a model once in the agy TUI to enable per-call overrides.)" >&2
+    fi
+  fi
+
+  # READ-ONLY run: --sandbox + --add-dir <tmp> + --log-file; NO
+  # --dangerously-skip-permissions, NO write_file. </dev/null dodges the
+  # non-TTY stdin hang. stdout is empty under #76 — ignored.
+  if [ "$use_override" -eq 1 ]; then
+    with_model_override "$canonical" -- "$agy" --sandbox \
+      --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
+      </dev/null >/dev/null 2>&1 || true
+  else
+    "$agy" --sandbox \
+      --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
+      </dev/null >/dev/null 2>&1 || true
+  fi
+
+  # Recover the model's answer from agy's own transcript. Pass the
+  # Windows-safe log path (logfile_arg) so a native Node on Windows can read
+  # it even if MSYS argv conversion is disabled, and the repo cwd as the
+  # fallback hint. transcript.mjs prints the answer + exits 0, or exits
+  # non-zero (empty) if nothing was recovered. We capture its stderr and
+  # surface it only on failure, so diagnostics aren't lost but the happy
+  # path stays clean.
+  local rc=0 answer="" node_err="$outdir/node.err"
+  if answer="$(node "$AGY_LIB_DIR/transcript.mjs" "$logfile_arg" "$cwd_arg" 2>"$node_err")" && [ -n "$answer" ]; then
+    printf '%s\n' "$answer"
+  else
+    rc=1
+    {
+      echo "error: agy returned no output."
+      echo "       Could not recover an answer from agy's transcript (issue #76 capture)."
+      echo "       Possible causes:"
+      echo "       - the prompt timed out (raise the timeout), or"
+      echo "       - agy was interrupted before it answered."
+      if [ -s "$node_err" ]; then
+        echo "       transcript.mjs stderr:"
+        sed 's/^/         /' "$node_err"
+      fi
+      echo "       Run \`agy\` interactively to debug, or check ~/.gemini/antigravity-cli/log/."
+    } >&2
+  fi
+  rm -rf "$outdir"
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Legacy fallback capture — used only when `node` is unavailable. Instructs
+# agy to write_file its answer to a temp file under
+# --dangerously-skip-permissions, scoped to a throwaway temp dir. See the
+# _agy_capture header for why the transcript path is preferred.
+# ---------------------------------------------------------------------------
+_agy_capture_writefile() {
   local agy="$1" canonical="$2" timeout="$3" prompt="$4"
   shift 4
   local outdir
@@ -413,7 +519,7 @@ _agy_capture() {
   local max_body="${AGY_PROMPT_MAX_BYTES:-26000}"
   local prompt_bytes; prompt_bytes="$(printf '%s' "$prompt" | wc -c)"
   if [ "$prompt_bytes" -gt "$max_body" ]; then
-    prompt="$(printf '%s' "$prompt" | head -c "$max_body")"$'\n\n[...content truncated to fit the OS command-line length limit; some diff/file context was omitted...]'
+    prompt="$(printf '%s' "$prompt" | head -c "$max_body" || true)"$'\n\n[...content truncated to fit the OS command-line length limit; some diff/file context was omitted...]'
   fi
   local augmented
   augmented="$(printf '%s\n\n---\nOUTPUT INSTRUCTION (required): Use the write_file tool to write your COMPLETE response to this exact path:\n%s\nDo NOT print the answer to chat — that path is your only deliverable. After writing the file, stop.\n' "$prompt" "$prompt_path")"
@@ -593,7 +699,11 @@ cmd_review() {
     # the file, so content containing ``` (or ````) can't close the
     # block early. min 3.
     local maxrun
-    maxrun="$(grep -oE '`+' "$abs" 2>/dev/null | awk '{ if (length>m) m=length } END { n=(m<2?2:m)+1; print n }')"
+    # `|| true`: grep exits 1 when the file contains no backticks; with
+    # `set -o pipefail` that propagates and `set -e` would abort the whole
+    # review on the first backtick-free file (e.g. package.json). awk still
+    # prints the count (3 for no-backtick input), so swallow grep's status.
+    maxrun="$(grep -oE '`+' "$abs" 2>/dev/null | awk '{ if (length>m) m=length } END { n=(m<2?2:m)+1; print n }' || true)"
     [ -n "$maxrun" ] || maxrun=3
     # Build the fence without `seq` (absent in some minimal shells).
     local fence="" _i

@@ -55,9 +55,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/agy-companion.mjs" adversarial-review --base
 
 ## Behavior notes
 
-- The companion does NOT auto-approve agy tool calls. If agy decides
-  it needs to read files, it will prompt; in background mode that
-  stalls the job.
+- **Read-only by construction.** Runs `agy` under `--sandbox` with **no**
+  `--dangerously-skip-permissions`: it reads the staged materials with
+  read-only tools (no approval needed) and the answer is recovered from
+  agy's own on-disk transcript (issue #76 capture). Background runs
+  complete unattended — there's no write prompt to stall on.
 - Adversarial reviews skew long. Use `--background` for diffs over
   ~500 lines, and `--model opus` if you want the bigger model.
 - If there is no diff (clean working tree, or empty branch diff),

@@ -1,0 +1,28 @@
+# Enforce LF line endings for all text, on every platform.
+#
+# Critical for the shell scripts: real bash (Linux / macOS / WSL) chokes on
+# CRLF line endings ("$'\r': command not found", "set: pipefail: invalid
+# option name"), while Git-for-Windows bash tolerates them. So a Windows
+# checkout with core.autocrlf=true produces CRLF scripts that break the
+# moment they're run under WSL — which is exactly the path we recommend for
+# an OS-hard sandbox. Forcing eol=lf keeps the scripts runnable everywhere.
+* text=auto eol=lf
+
+# Be explicit for the script / source / config types.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.bats  text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# Known binaries: never normalize.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary

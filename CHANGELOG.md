@@ -13,6 +13,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.6.0] - 2026-05-31 (limeflash fork)
+
+**Read-only commands no longer use `--dangerously-skip-permissions`.**
+Found that `agy` persists its own conversation transcript to disk on every
+`--print` run — with no tool permission and no auto-approve — so the
+read-only commands read the answer back from there instead of the
+`write_file` + auto-approve workaround. Validated live on agy 1.0.3, then
+dogfooded by running the new `/agy:review` on this very change.
+
+### Changed
+- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review` are now genuinely
+  read-only.** They run `agy` with `--sandbox` and **without**
+  `--dangerously-skip-permissions`, then recover the answer from agy's
+  transcript (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`,
+  located via the run's own `--log-file`). agy's read-only tools
+  (`list_dir` / `view_file`) execute without approval; it is never granted
+  write access or the repo. Removes both crutches (write_file injection +
+  auto-approve) for these commands.
+- `/agy:rescue` (edits files) and `/agy:image` (saves an image) keep the
+  scoped `write_file` + `--dangerously-skip-permissions` path — they
+  legitimately write. rescue's guards (clean-tree, post-run diff,
+  `--isolate`) are unchanged.
+
+### Added
+- `lib/transcript.mjs`: conversation-id parsing, transcript extraction
+  (PLANNER_RESPONSE content only), store-dir resolution, a workspace-map
+  fallback, and a `node transcript.mjs <logfile> [cwd]` CLI used by the
+  Bash wrapper. 18 new unit tests (206 total).
+- Bash `_agy_capture` rewritten to the transcript path (node-primary);
+  falls back to the legacy `_agy_capture_writefile` when `node` is absent,
+  so `/agy:ask` still works everywhere.
+
+### Fixed (from dogfooding the new path with `/agy:review` on itself)
+- Pass the Windows-safe `--log-file` path (not the POSIX one) to
+  `transcript.mjs`, and the repo `cwd` (not the temp dir) as the
+  `last_conversations.json` fallback hint.
+- Surface `transcript.mjs` stderr on failure instead of swallowing it.
+- `cancelJob` now removes a canceled review's stage dir (a killed worker's
+  `finally{}` never runs, so it would otherwise leak).
+
+### Cross-platform
+- The store dir is **self-located** from agy's own log line
+  (`CLI app data directory: <path>`) instead of assuming
+  `<homedir>/.gemini/antigravity-cli`, so the transcript path is correct on
+  Windows / macOS / Linux / WSL by construction.
+- Added `.gitattributes` forcing `eol=lf` for shell scripts (and all text).
+  A Windows checkout with `core.autocrlf=true` produced CRLF scripts that
+  break under real bash (`$'\r': command not found`) — which would bite the
+  WSL path we recommend for an OS-hard sandbox.
+- Validated `/agy:ask` (bash) and `/agy:review` (Node) end-to-end on **WSL2
+  (Ubuntu 24.04) with real agy 1.0.3**: read-only, `--sandbox`, no
+  auto-approve; the review caught both planted bugs.
+
+### Docs
+- SECURITY.md + README rewritten: read-only commands need no auto-approve;
+  honest per-platform guarantee levels updated.
+
 ## [0.5.9] - 2026-05-30 (limeflash fork)
 
 Fifth dogfood round: an adversarial self-review of the 0.5.8 Design A+
