@@ -49,9 +49,9 @@ import {
   captureWorktreePatch,
 } from "./lib/git.mjs";
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
-import { scanDiffForSecrets } from "./lib/secrets.mjs";
+import { scanDiffForSecrets, scanTextForSecrets } from "./lib/secrets.mjs";
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
@@ -393,6 +393,45 @@ async function runReviewCommand(argv, { adversarial }) {
     await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
     process.stderr.write(`error: could not stage review materials: ${err.message}\n`);
     process.exit(1);
+  }
+
+  // Secret guard, pass 2: the diff scan above only sees ADDED lines, but we
+  // ship the FULL current content of each changed file as review context —
+  // a secret sitting on an unchanged line would never appear in the diff's
+  // `+` lines and would slip through. Scan exactly what was staged.
+  const stagedSecretHits = new Set();
+  for (const rel of staged) {
+    try {
+      const txt = await fsp.readFile(path.join(stageDir, "files", rel), "utf8");
+      for (const h of scanTextForSecrets(txt)) stagedSecretHits.add(h);
+    } catch {
+      /* unreadable staged file — skip */
+    }
+  }
+  if (stagedSecretHits.size > 0) {
+    const hits = [...stagedSecretHits];
+    if (process.env.AGY_REVIEW_ALLOW_SECRETS !== "1") {
+      await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+      process.stderr.write(
+        [
+          "error: the full content of a changed file matches common secret patterns:",
+          ...hits.map((h) => `  - ${h}`),
+          "",
+          "These values are shipped to Gemini as review context even though they",
+          "are not in the diff. Remove them, or set AGY_REVIEW_ALLOW_SECRETS=1 to proceed.",
+          "",
+        ].join("\n"),
+      );
+      process.exit(65);
+    }
+    process.stderr.write(
+      [
+        "WARNING: a changed file's full content matches common secret patterns:",
+        ...hits.map((h) => `  - ${h}`),
+        "Proceeding because AGY_REVIEW_ALLOW_SECRETS=1 — those values will be sent to Gemini.",
+        "",
+      ].join("\n"),
+    );
   }
 
   const focus = joinPositional(parsed);

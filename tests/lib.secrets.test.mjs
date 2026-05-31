@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scanDiffForSecrets } from "../plugins/agy/scripts/lib/secrets.mjs";
+import { scanDiffForSecrets, scanTextForSecrets } from "../plugins/agy/scripts/lib/secrets.mjs";
 
 const d = (...lines) => lines.join("\n");
 
@@ -63,5 +63,38 @@ describe("scanDiffForSecrets — fine-grained GitHub PAT", () => {
   it("detects github_pat_ tokens", () => {
     const tok = "github_pat_" + "A".repeat(82);
     expect(scanDiffForSecrets(`+token = "${tok}"`)).toContain("GitHub fine-grained PAT");
+  });
+});
+
+describe("scanTextForSecrets (raw content — powers the GAP-2 full-file scan)", () => {
+  it("scans raw text with no `+` prefix required", () => {
+    expect(scanTextForSecrets('const k = "AKIAIOSFODNN7EXAMPLE";')).toContain("AWS access key");
+  });
+  it("empty / undefined → no hits", () => {
+    expect(scanTextForSecrets("")).toEqual([]);
+    expect(scanTextForSecrets(undefined)).toEqual([]);
+  });
+});
+
+describe("modern API key formats (GAP-3)", () => {
+  const ant = "sk-ant-api03-" + "A".repeat(30);
+  const proj = "sk-proj-" + "B".repeat(30);
+  const legacy = "sk-" + "c".repeat(40);
+
+  it("detects an Anthropic sk-ant- key (raw + diff)", () => {
+    expect(scanTextForSecrets(ant)).toContain("Anthropic API key");
+    expect(scanDiffForSecrets(`+key = "${ant}"`)).toContain("Anthropic API key");
+  });
+  it("detects an OpenAI sk-proj- key", () => {
+    expect(scanTextForSecrets(proj)).toContain("OpenAI project key");
+  });
+  it("still detects a legacy sk- key", () => {
+    expect(scanTextForSecrets(legacy)).toContain("OpenAI legacy API key");
+  });
+  it("does not flag a dashed identifier that merely contains 'sk-'", () => {
+    // The legacy pattern needs 20 ALNUM after sk- (no dashes), and the
+    // modern patterns need the sk-ant-/sk-proj- prefix — so a kebab-case
+    // word like disk-management-... must not match.
+    expect(scanTextForSecrets("disk-management-system-controller-v2")).toEqual([]);
   });
 });

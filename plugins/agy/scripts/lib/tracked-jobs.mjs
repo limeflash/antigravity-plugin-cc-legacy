@@ -291,7 +291,12 @@ async function defaultAgyRunner(record, { sink } = {}) {
   const writeCapable = record.kind === "rescue";
   // agy runs in the stage dir (review) or the execRoot (rescue/ask).
   const cwd = stageDir ?? execRoot;
-  const args = ["--dangerously-skip-permissions"];
+  // Auto-approve ONLY for write-capable kinds (rescue). review/adversarial
+  // short-circuit to the transcript path before reaching here, but gate the
+  // flag explicitly so a future non-write kind can never silently
+  // auto-approve through this path (defense in depth).
+  const args = [];
+  if (writeCapable) args.push("--dangerously-skip-permissions");
   if (!writeCapable) args.push("--sandbox");
   args.push("--add-dir", outDir);
   // rescue gets repo write access; review/ask never do (the repo is not

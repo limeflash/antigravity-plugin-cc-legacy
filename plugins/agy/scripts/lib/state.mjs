@@ -85,6 +85,39 @@ export function isValidJobId(s) {
 }
 
 /**
+ * Best-effort: add `.agy-plugin/` to the workspace's LOCAL Git exclude
+ * (`.git/info/exclude`) so the plugin's job-state dir doesn't clutter the
+ * user's `git status`. That file is the idiomatic place for repo-local,
+ * uncommitted ignores — it never touches their tracked `.gitignore`. No-op
+ * if the workspace isn't a plain git repo (e.g. a worktree whose `.git` is
+ * a file), or on any error.
+ */
+export async function ensureGitExclude(workspaceRoot) {
+  try {
+    const gitDir = path.join(workspaceRoot, ".git");
+    const st = await fsp.stat(gitDir).catch(() => null);
+    if (!st || !st.isDirectory()) return;
+    const infoDir = path.join(gitDir, "info");
+    await ensureDir(infoDir);
+    const excludeFile = path.join(infoDir, "exclude");
+    let current = "";
+    try {
+      current = await fsp.readFile(excludeFile, "utf8");
+    } catch {
+      /* no exclude file yet — we'll create it */
+    }
+    if (/^\s*\.agy-plugin\/?\s*$/m.test(current)) return; // already excluded
+    const sep = current && !current.endsWith("\n") ? "\n" : "";
+    await fsp.appendFile(
+      excludeFile,
+      `${sep}# Added by the agy plugin — local job-state dir (not committed).\n.agy-plugin/\n`,
+    );
+  } catch {
+    /* best-effort: never fail a job over gitignore hygiene */
+  }
+}
+
+/**
  * Ensure all directories under .agy-plugin/ exist. Cheap to call
  * repeatedly; callers don't have to remember to invoke this first.
  */
@@ -92,6 +125,7 @@ export async function ensureStateDirs(workspaceRoot) {
   await ensureDir(jobsDir(workspaceRoot));
   await ensureDir(logsDir(workspaceRoot));
   await ensureDir(runtimeDir(workspaceRoot));
+  await ensureGitExclude(workspaceRoot);
 }
 
 /**

@@ -13,6 +13,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.6.1] - 2026-05-31 (limeflash fork)
+
+Hardening pass after full cross-platform validation (Windows + WSL2 +
+**macOS 26.5**, all green on real agy 1.0.3) and an adversarial security
+review run by Claude Code on the Mac. Structural defenses held (symlink
+exfiltration, path traversal, job-id validation, image allowlist,
+secret-abort-before-network); the secret scanner had three real coverage
+gaps — now closed.
+
+### Fixed — secret scanner
+- **GAP-1 (Node↔Bash parity).** The Bash scanner lacked the `github_pat_`
+  (fine-grained GitHub PAT) pattern the Node scanner had — so the default
+  `/agy:review` (Bash path) could ship one to Gemini. Added; the two
+  pattern sets now match (the "parity" comment is finally true).
+- **GAP-2 (full-file blind spot).** The scanner inspected only the diff's
+  ADDED lines, but review ships the FULL current content of changed files
+  as context — a secret on an UNCHANGED line of a file you're editing would
+  leak while the guard reported "clean." Both paths now also scan the full
+  staged/inlined content (`scanTextForSecrets` / `_scan_text_for_secrets`).
+  Verified: a secret on an unchanged line now aborts the review (exit 65)
+  before any agy/network call.
+- **GAP-3 (modern key formats).** `sk-[alnum]{20,}` missed dash-bearing
+  keys — `sk-ant-api03-…` (Anthropic), `sk-proj-…` (OpenAI project). Added
+  explicit patterns for both, kept the legacy one, and fixed the misleading
+  "Anthropic-style" label.
+
+### Changed — defense in depth
+- `runViaWriteFile` gates `--dangerously-skip-permissions` on the
+  write-capable kind (rescue) explicitly, rather than adding it
+  unconditionally and relying on review/adversarial short-circuiting first.
+- `.agy-plugin/` (the per-workspace job-state dir) is auto-added to the
+  workspace's local `.git/info/exclude`, so it doesn't clutter the user's
+  `git status` — local-only, never touches their tracked `.gitignore`.
+
+### Validated
+- macOS 26.5 on real agy 1.0.3: `/agy:ask`, `/agy:review`,
+  `/agy:adversarial-review` all pass from symlinked `/var/folders/…` paths;
+  the 0.6.0 `isMainModule` fix confirmed on hardware. 218 unit tests + CI.
+
 ## [0.6.0] - 2026-05-31 (limeflash fork)
 
 **Read-only commands no longer use `--dangerously-skip-permissions`.**

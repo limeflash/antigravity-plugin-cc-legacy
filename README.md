@@ -11,14 +11,15 @@
 > rescue safety rails (`--isolate`), and a CI-tested wrapper. See
 > [NOTICE](./NOTICE) and [CHANGELOG.md](./CHANGELOG.md) for what changed.
 >
-> **Status (v0.6.0):** the read-only commands (`/agy:ask`, `/agy:review`,
-> `/agy:adversarial-review`) now run with **no** `--dangerously-skip-permissions`
+> **Status (v0.6.1):** the read-only commands (`/agy:ask`, `/agy:review`,
+> `/agy:adversarial-review`) run with **no** `--dangerously-skip-permissions`
 > — output is read from `agy`'s own on-disk transcript. Validated end-to-end
-> against a real `agy` 1.0.3 install on **Windows (git-bash)** and **WSL2
-> Ubuntu**; 210 unit tests + CI (shellcheck, bats, vitest on Node 18/20/22).
-> The review path was hardened by running the plugin's own `/agy:review` on
-> its own code across five rounds — every finding fixed (see
-> [CHANGELOG.md](./CHANGELOG.md)).
+> against a real `agy` 1.0.3 install on **Windows (git-bash)**, **WSL2
+> Ubuntu**, and **macOS 26.5**; 218 unit tests + CI (shellcheck, bats, vitest
+> on Node 18/20/22). Hardened by dogfooding the plugin's own
+> `/agy:review` / `/agy:adversarial-review` on its own code plus an
+> adversarial security pass — secret-scanner coverage gaps and a macOS
+> symlink bug fixed (see [CHANGELOG.md](./CHANGELOG.md)).
 
 Use Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from
 inside Claude Code. Delegate tasks to the `agy:runner` subagent, run quick

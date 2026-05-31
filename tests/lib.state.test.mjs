@@ -7,6 +7,7 @@ import {
   generateJobId,
   isValidJobId,
   ensureStateDirs,
+  ensureGitExclude,
   createJob,
   readJob,
   updateJob,
@@ -24,6 +25,24 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await fsp.rm(workspaceRoot, { recursive: true, force: true });
+});
+
+describe("ensureGitExclude", () => {
+  it("is a no-op (no throw) when the workspace is not a git repo", async () => {
+    await ensureGitExclude(workspaceRoot);
+    expect(await fsp.readdir(workspaceRoot)).not.toContain(".git");
+  });
+
+  it("adds .agy-plugin/ to .git/info/exclude, idempotently", async () => {
+    await fsp.mkdir(path.join(workspaceRoot, ".git"), { recursive: true });
+    await ensureGitExclude(workspaceRoot);
+    const exclude = path.join(workspaceRoot, ".git", "info", "exclude");
+    const first = await fsp.readFile(exclude, "utf8");
+    expect(first).toMatch(/^\.agy-plugin\/$/m);
+    await ensureGitExclude(workspaceRoot);
+    const second = await fsp.readFile(exclude, "utf8");
+    expect((second.match(/^\.agy-plugin\/$/gm) || []).length).toBe(1);
+  });
 });
 
 describe("generateJobId / isValidJobId", () => {

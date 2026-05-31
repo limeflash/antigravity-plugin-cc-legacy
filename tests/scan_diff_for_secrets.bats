@@ -97,3 +97,36 @@ load helpers
   run _scan_diff_for_secrets "$diff"
   [ "$status" -eq 0 ]
 }
+
+@test "fine-grained github_pat_ in added line: exit 1 (GAP-1 — bash parity)" {
+  load_agy_run
+  local tok diff
+  tok="github_pat_$(printf 'A%.0s' {1..82})"
+  diff="$(printf '+token = "%s"\n' "$tok")"
+  run _scan_diff_for_secrets "$diff"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"GitHub fine-grained PAT"* ]]
+}
+
+@test "Anthropic sk-ant- key in added line: exit 1 (GAP-3)" {
+  load_agy_run
+  local key diff
+  key="sk-ant-api03-$(printf 'A%.0s' {1..30})"
+  diff="$(printf '+k = "%s"\n' "$key")"
+  run _scan_diff_for_secrets "$diff"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Anthropic API key"* ]]
+}
+
+@test "_scan_text_for_secrets scans RAW content (GAP-2 full-file path)" {
+  load_agy_run
+  run _scan_text_for_secrets 'const k = "AKIAIOSFODNN7EXAMPLE";'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"AWS access key"* ]]
+}
+
+@test "dashed identifier containing 'sk-' does NOT trigger (low false-positive)" {
+  load_agy_run
+  run _scan_text_for_secrets 'disk-management-system-controller-v2'
+  [ "$status" -eq 0 ]
+}

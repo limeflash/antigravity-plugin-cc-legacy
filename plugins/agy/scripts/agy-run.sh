@@ -101,17 +101,20 @@ _image_source_in_allowlist() {
 # Patterns and labels are kept in parallel arrays because some patterns
 # legitimately contain `|` (alternation), so a single-string
 # "pattern|label" format is ambiguous.
-_scan_diff_for_secrets() {
-  local diff_text="$1"
-  local added
-  # Only scan added lines (starting with single `+`, not the `+++` header).
-  added="$(printf '%s\n' "$diff_text" | grep -E '^\+[^+]' || true)"
-  [ -n "$added" ] || return 0
+# Scan RAW text against the secret patterns. Kept in sync with the Node
+# companion's lib/secrets.mjs PATTERNS (tests exercise both so they don't
+# drift). Prints matched labels and returns 1 if any hit; 0 if clean.
+_scan_text_for_secrets() {
+  local text="$1"
+  [ -n "$text" ] || return 0
   local pats=(
     'AKIA[0-9A-Z]{16}'
     'ASIA[0-9A-Z]{16}'
     'gh[pousr]_[A-Za-z0-9]{36,}'
+    'github_pat_[A-Za-z0-9_]{40,}'
     'xox[baprs]-[A-Za-z0-9-]{10,}'
+    'sk-ant-[A-Za-z0-9_-]{20,}'
+    'sk-proj-[A-Za-z0-9_-]{20,}'
     'sk-[A-Za-z0-9]{20,}'
     '-----BEGIN [A-Z ]*PRIVATE KEY-----'
     '(api[_-]?key|secret|token|password|access[_-]?key)[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_+/=\-]{16,}'
@@ -120,8 +123,11 @@ _scan_diff_for_secrets() {
     'AWS access key'
     'AWS STS token'
     'GitHub personal access token'
+    'GitHub fine-grained PAT'
     'Slack token'
-    'OpenAI/Anthropic-style API key'
+    'Anthropic API key'
+    'OpenAI project key'
+    'OpenAI legacy API key'
     'PEM private key block'
     'inline credential assignment'
   )
@@ -130,13 +136,22 @@ _scan_diff_for_secrets() {
   for i in "${!pats[@]}"; do
     # `-e <pattern>` is required because some patterns start with `-`
     # (e.g. PEM headers), which grep would otherwise treat as an option.
-    if printf '%s\n' "$added" | grep -aEi -e "${pats[$i]}" >/dev/null 2>&1; then
+    if printf '%s\n' "$text" | grep -aEi -e "${pats[$i]}" >/dev/null 2>&1; then
       hits+=("${labels[$i]}")
     fi
   done
   [ "${#hits[@]}" -gt 0 ] || return 0
   printf '%s\n' "${hits[@]}"
   return 1
+}
+
+# Scan only the ADDED lines of a unified diff (single `+`, not the `+++`
+# header). Delegates the pattern matching to _scan_text_for_secrets.
+_scan_diff_for_secrets() {
+  local diff_text="$1"
+  local added
+  added="$(printf '%s\n' "$diff_text" | grep -E '^\+[^+]' || true)"
+  _scan_text_for_secrets "$added"
 }
 
 cmd_check() {
@@ -710,6 +725,29 @@ cmd_review() {
     for ((_i = 0; _i < maxrun; _i++)); do fence="${fence}\`"; done
     files_block="${files_block}"$'\n'"### ${f}"$'\n'"${fence}${ext}"$'\n'"$(cat "$abs")"$'\n'"${fence}"$'\n'
   done < <(git -C "$repo_dir" diff --name-only "${diff_range[@]}" 2>/dev/null)
+
+  # Secret guard, pass 2: the diff scan above only sees added lines, but the
+  # files block ships the FULL current content of changed files — a secret
+  # on an unchanged line would slip through. Scan exactly what we ship.
+  if [ -n "$files_block" ]; then
+    local file_secret_hits
+    if ! file_secret_hits="$(_scan_text_for_secrets "$files_block")"; then
+      {
+        echo
+        echo "[wrapper] WARNING: full content of a changed file matches common secret patterns:"
+        printf '%s\n' "$file_secret_hits" | sed 's/^/  - /'
+        echo
+        echo "  These values ship to Google's Gemini API as review context even though"
+        echo "  they aren't in the diff."
+        if [ "${AGY_REVIEW_ALLOW_SECRETS:-0}" != "1" ]; then
+          echo "  Aborting. Set AGY_REVIEW_ALLOW_SECRETS=1 to proceed anyway, or remove"
+          echo "  the matching values first."
+          exit 65
+        fi
+        echo "  Proceeding because AGY_REVIEW_ALLOW_SECRETS=1."
+      } >&2
+    fi
+  fi
 
   local full
   if [ -n "$files_block" ]; then
