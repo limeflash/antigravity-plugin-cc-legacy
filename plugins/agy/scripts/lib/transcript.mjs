@@ -25,7 +25,7 @@
 // --dangerously-skip-permissions. Validated live on agy 1.0.3 (see
 // SECURITY.md "Read-only capture").
 
-import { promises as fsp } from "node:fs";
+import { promises as fsp, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -216,11 +216,19 @@ export async function captureAnswer({ logFile, cwd, env } = {}) {
 function isMainModule() {
   const argv1 = process.argv[1];
   if (!argv1) return false;
-  try {
-    return path.resolve(argv1) === path.resolve(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
+  const here = fileURLToPath(import.meta.url);
+  // Realpath both sides: on macOS /var and /tmp symlink to /private/...,
+  // so argv1 (as invoked) and import.meta.url (realpath-resolved by Node)
+  // differ and a plain resolve() compare falsely returns false — silently
+  // skipping the CLI dispatch (empty output, exit 0). Fall back per side.
+  const norm = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return norm(argv1) === norm(here);
 }
 
 if (isMainModule()) {

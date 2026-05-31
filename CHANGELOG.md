@@ -54,6 +54,15 @@ dogfooded by running the new `/agy:review` on this very change.
   `finally{}` never runs, so it would otherwise leak).
 
 ### Cross-platform
+- **macOS / symlinked-path fix (critical).** `isMainModule()` (in
+  `agy-companion.mjs` and `lib/transcript.mjs`) compared `process.argv[1]`
+  to `import.meta.url` with `path.resolve`. On macOS `/var` and `/tmp` are
+  symlinks to `/private/…`, so the two paths differed and the check
+  returned false — silently skipping the **entire** CLI dispatch (empty
+  output, exit 0). It now realpath-compares both sides. Without it, every
+  companion command and the bash transcript capture were a silent no-op
+  when run from a symlinked path on macOS. Surfaced by the real-Mac smoke;
+  reproduced + fixed under a symlink in WSL.
 - The store dir is **self-located** from agy's own log line
   (`CLI app data directory: <path>`) instead of assuming
   `<homedir>/.gemini/antigravity-cli`, so the transcript path is correct on

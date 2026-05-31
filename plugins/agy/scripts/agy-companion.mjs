@@ -13,7 +13,7 @@
 import process from "node:process";
 import path from "node:path";
 import os from "node:os";
-import { promises as fsp } from "node:fs";
+import { promises as fsp, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { parseArgs, joinPositional } from "./lib/args.mjs";
@@ -592,12 +592,20 @@ async function main(argv) {
 function isMainModule() {
   const argv1 = process.argv[1];
   if (!argv1) return false;
-  try {
-    const here = fileURLToPath(import.meta.url);
-    return path.resolve(argv1) === path.resolve(here);
-  } catch {
-    return false;
-  }
+  const here = fileURLToPath(import.meta.url);
+  // Compare realpaths: on macOS /var and /tmp are symlinks to /private/...,
+  // so argv1 (as invoked) and import.meta.url (realpath-resolved by Node)
+  // differ — a plain resolve() compare then falsely returns false and the
+  // CLI dispatch is silently skipped (no output, exit 0). Realpath both
+  // sides, falling back to resolve() per side if the path can't be stat'd.
+  const norm = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return norm(argv1) === norm(here);
 }
 
 if (isMainModule()) {
