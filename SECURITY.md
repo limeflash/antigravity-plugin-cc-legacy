@@ -7,16 +7,25 @@
 command needs to write.
 
 **Read-only commands (`/agy:ask`, `/agy:review`, `/agy:adversarial-review`)
-— NO auto-approve.** `agy` persists its own conversation transcript to
-disk on every `--print` run, with no tool permission and no auto-approve.
-So the plugin runs `agy` strictly read-only and reads the answer back from
-that transcript (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`,
-located via the run's own `--log-file`). These commands run with
-`--sandbox` and **without** `--dangerously-skip-permissions`: `agy`'s
-read-only tools (`list_dir` / `view_file`) execute without approval, but it
-is never granted write access, and the repo is never handed to it. (When
-`node` is unavailable, `/agy:ask` falls back to the scoped write_file path
-below, confined to a throwaway temp dir.)
+— agy runs OUTSIDE your repo.** `agy` persists its own conversation
+transcript to disk on every `--print` run (no tool permission needed), so
+the plugin reads the answer back from that transcript
+(`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`, located via the
+run's own `--log-file`) instead of a write_file workaround — no
+`--dangerously-skip-permissions`.
+
+**Important / the thing that actually enforces read-only:** `agy --print`
+**still executes write tools** even without `--dangerously-skip-permissions`
+(a non-TTY prompt is auto-proceeded). So "no auto-approve" alone does **not**
+make a command read-only — that was a real bug (fixed in 0.6.2). What makes
+these commands read-only is that **agy is launched from a throwaway temp dir
+as its `cwd`, with only that temp dir in `--add-dir`, and your repo is never
+its cwd, in `--add-dir`, its path, or its env** — so agy has no path to
+write into the repo. (review/adversarial additionally read only pre-staged
+copies of the diff + changed files in that temp dir.) `--sandbox` is layered
+on top where the OS enforces it. When `node` is unavailable, `/agy:ask`
+falls back to the write_file path below — also run from (and confined to) a
+throwaway temp dir.
 
 **Write-capable commands (`/agy:rescue`, `/agy:image`) — auto-approve, but
 scoped.** `rescue` legitimately edits files and `image` saves a generated
@@ -32,12 +41,14 @@ scope + guards, not from removing the flag:
 
 **Honest guarantee levels:**
 
-- **macOS / Linux / WSL:** OS-enforced. `agy --sandbox` uses
-  seatbelt/bubblewrap to confine writes to the workspace, and the
-  read-only commands also never receive write tools at all.
+- **macOS / Linux / WSL:** OS-enforced on top. `agy --sandbox` uses
+  seatbelt/bubblewrap to confine writes to the workspace (the throwaway
+  temp dir), and the repo is never that workspace.
 - **Native Windows (git-bash):** the read-only commands are read-only *by
-  construction* — no write tools, no auto-approve, and the repo is never
-  handed to `agy`. `--sandbox`'s OS enforcement is *very strong practical*,
+  construction* — agy runs from a throwaway temp dir and the repo is never
+  its cwd, in `--add-dir`, its path, or env, so it has no path to write
+  there (this holds even though agy still executes write tools).
+  `--sandbox`'s OS enforcement is *very strong practical*,
   **not** OS-hard: there is no lightweight, no-admin, dependency-free OS
   sandbox on Windows (`icacls`/`attrib` are reversible by the same user and
   were deliberately **not** used — they'd be security theater and risk

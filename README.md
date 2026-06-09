@@ -244,14 +244,16 @@ The read-only commands work around this **without** auto-approval. `agy`
 persists its own conversation transcript to disk on every `--print` run —
 with no tool permission required — so:
 
-- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review`** run with
-  `--sandbox` and **no** `--dangerously-skip-permissions`, then read the
-  answer back from `agy`'s transcript
+- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review`** read the answer
+  back from `agy`'s transcript
   (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`, located via
-  the run's own `--log-file`). `agy`'s read-only tools (`list_dir` /
-  `view_file`) execute without approval; it is never granted write access
-  or the repo. (If `node` isn't available, `/agy:ask` falls back to the
-  scoped `write_file` path below.)
+  the run's own `--log-file`) with **no** `--dangerously-skip-permissions`.
+  What makes them read-only is that **agy is launched from a throwaway temp
+  dir (not your repo)** with only that dir in `--add-dir` — so even though
+  `agy --print` still executes write tools, it has no path to write into
+  your repo. `--sandbox` is layered on where the OS enforces it. (If `node`
+  isn't available, `/agy:ask` falls back to the scoped `write_file` path
+  below, also run from the temp dir.)
 - **`/agy:rescue`** edits files by design, and **`/agy:image`** saves a
   generated image, so they keep the `write_file` +
   `--dangerously-skip-permissions` path, scoped to a throwaway temp dir.

@@ -13,6 +13,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.6.2] - 2026-05-31 (limeflash fork)
+
+**Security fix — the read-only commands could still write to your repo.**
+Caught by dogfooding `/agy:ask` on a real project. `agy --print` **executes
+write tools even without `--dangerously-skip-permissions`** (a non-TTY
+prompt is auto-proceeded), so the bash `/agy:ask` and the simple
+`/agy:review` — which ran agy with `cwd` = the user's repo — let agy edit
+files in that repo. The "no auto-approve ⇒ read-only" assumption was wrong;
+running agy *outside* the repo is what actually enforces it.
+
+(Scope: the **Node** `/agy:review --base` / `/agy:adversarial-review` paths
+were never affected — they already run agy in a staging temp dir with the
+repo unreachable. The bug was the bash `_agy_capture` path.)
+
+### Fixed
+- `_agy_capture` (powers `/agy:ask` + simple `/agy:review`) and the
+  `node`-absent `_agy_capture_writefile` fallback now run agy **from the
+  throwaway temp dir** (`cwd`), not the repo. The repo is never agy's cwd,
+  in `--add-dir`, its path, or env — so it has no path to write there.
+  Verified: explicitly asking `/agy:ask` to edit a repo file now leaves the
+  working tree untouched (`git status` clean) and capture still works.
+- `/agy:image` likewise runs agy from its temp dir (the generated image is
+  written there, then copied to `--output` by the wrapper).
+
+### Added
+- `tests/read_only_cwd.bats`: stubs `agy` and asserts it runs from a temp
+  dir, not the caller's cwd, for both capture paths.
+
+### Docs
+- SECURITY.md corrected: read-only is enforced by running agy **outside**
+  the repo, not by the absence of `--dangerously-skip-permissions` (agy
+  still executes write tools in `--print` mode).
+
 ## [0.6.1] - 2026-05-31 (limeflash fork)
 
 Hardening pass after full cross-platform validation (Windows + WSL2 +

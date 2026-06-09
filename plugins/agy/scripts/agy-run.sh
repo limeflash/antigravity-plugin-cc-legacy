@@ -423,19 +423,24 @@ _agy_capture() {
   outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
   local logfile="$outdir/agy-run.log"
   # agy may be a Windows .exe invoked from Git Bash, which needs native
-  # Windows paths for --add-dir and --log-file.
-  # cwd_arg is the directory agy actually runs in ($PWD — we never cd), so
-  # it's the workspace key agy registers in last_conversations.json; pass it
-  # as the transcript fallback hint.
+  # Windows paths for --add-dir / --log-file / cwd.
+  #
+  # CRITICAL: we run agy FROM the throwaway temp dir (cwd="$outdir"), NOT the
+  # user's repo. `agy --print` still EXECUTES write tools even without
+  # --dangerously-skip-permissions (a non-TTY prompt is auto-proceeded), so
+  # "no auto-approve" alone does NOT make a command read-only. What makes it
+  # read-only is that the repo is neither agy's cwd nor in --add-dir, so it
+  # has no path to write there. cwd_arg therefore points at the temp dir
+  # (also the workspace key agy registers — used as the transcript fallback).
   local target_dir logfile_arg cwd_arg
   if command -v cygpath >/dev/null 2>&1; then
     target_dir="$(cygpath -w "$outdir")"
     logfile_arg="$(cygpath -w "$logfile")"
-    cwd_arg="$(cygpath -w "$PWD")"
+    cwd_arg="$target_dir"
   else
     target_dir="$outdir"
     logfile_arg="$logfile"
-    cwd_arg="$PWD"
+    cwd_arg="$outdir"
   fi
 
   # agy --print takes the whole prompt as ONE argv entry, so it must stay
@@ -460,17 +465,20 @@ _agy_capture() {
     fi
   fi
 
-  # READ-ONLY run: --sandbox + --add-dir <tmp> + --log-file; NO
-  # --dangerously-skip-permissions, NO write_file. </dev/null dodges the
-  # non-TTY stdin hang. stdout is empty under #76 — ignored.
+  # READ-ONLY run: execute agy FROM the throwaway temp dir (cwd="$outdir"),
+  # with --sandbox + --add-dir <tmp> + --log-file and NO
+  # --dangerously-skip-permissions / NO write_file. Running outside the repo
+  # is what actually enforces read-only (see the cwd note above).
+  # </dev/null dodges the non-TTY stdin hang; stdout is empty under #76 (we
+  # read the transcript instead).
   if [ "$use_override" -eq 1 ]; then
-    with_model_override "$canonical" -- "$agy" --sandbox \
+    ( cd "$outdir" && with_model_override "$canonical" -- "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >/dev/null 2>&1 || true
+      </dev/null >/dev/null 2>&1 ) || true
   else
-    "$agy" --sandbox \
+    ( cd "$outdir" && "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >/dev/null 2>&1 || true
+      </dev/null >/dev/null 2>&1 ) || true
   fi
 
   # Recover the model's answer from agy's own transcript. Pass the
@@ -555,13 +563,13 @@ _agy_capture_writefile() {
   fi
 
   if [ "$use_override" -eq 1 ]; then
-    with_model_override "$canonical" -- "$agy" --dangerously-skip-permissions --sandbox \
+    ( cd "$outdir" && with_model_override "$canonical" -- "$agy" --dangerously-skip-permissions --sandbox \
       --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
-      </dev/null >/dev/null 2>&1 || true
+      </dev/null >/dev/null 2>&1 ) || true
   else
-    "$agy" --dangerously-skip-permissions --sandbox \
+    ( cd "$outdir" && "$agy" --dangerously-skip-permissions --sandbox \
       --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
-      </dev/null >/dev/null 2>&1 || true
+      </dev/null >/dev/null 2>&1 ) || true
   fi
 
   local rc=0
@@ -830,11 +838,13 @@ cmd_image() {
   local prompt
   prompt="$(printf 'Use your built-in generate_image tool to create this image: %s.%s\n\nAfter the image is saved, use the write_file tool to write ONLY the absolute filesystem path of the saved image (a single line, no quotes, nothing else) to this exact path:\n%s\nDo not print anything to chat. The marker file is your only textual deliverable.' "$description" "$name_clause" "$marker_path")"
 
-  # stdin </dev/null avoids the hang; --sandbox + --add-dir <tmp> scope
-  # the auto-approved write_file to the throwaway temp dir only.
-  "$agy_path" --dangerously-skip-permissions --sandbox --add-dir "$target_dir" \
+  # Run agy FROM the throwaway temp dir (cwd="$outdir") so its
+  # auto-approved write tools land in the temp, not the user's repo; the
+  # generated image is read back from the marker and copied to --output by
+  # this script. stdin </dev/null avoids the non-TTY hang.
+  ( cd "$outdir" && "$agy_path" --dangerously-skip-permissions --sandbox --add-dir "$target_dir" \
     --print-timeout "${AGY_IMAGE_TIMEOUT:-8m0s}" --print "$prompt" \
-    </dev/null >/dev/null 2>&1 || true
+    </dev/null >/dev/null 2>&1 ) || true
 
   local src=""
   if [ -s "$marker" ]; then
