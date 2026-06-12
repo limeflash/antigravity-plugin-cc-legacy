@@ -422,6 +422,13 @@ _agy_capture() {
   local outdir
   outdir="$(mktemp -d 2>/dev/null)" || { echo "error: could not create temp dir for agy output" >&2; return 1; }
   local logfile="$outdir/agy-run.log"
+  # Optional: stage a single (caller-validated) input file into the temp dir
+  # so a read-only command (e.g. /agy:doc-to-md) can hand agy a file to read
+  # without exposing the rest of the filesystem. agy runs from $outdir with
+  # only $outdir in --add-dir, so it sees this copy and nothing else.
+  if [ -n "${AGY_CAPTURE_STAGE_FILE:-}" ] && [ -f "${AGY_CAPTURE_STAGE_FILE}" ]; then
+    cp "${AGY_CAPTURE_STAGE_FILE}" "$outdir/" 2>/dev/null || true
+  fi
   # agy may be a Windows .exe invoked from Git Bash, which needs native
   # Windows paths for --add-dir / --log-file / cwd.
   #
@@ -625,9 +632,91 @@ cmd_ask() {
   fi
   local path
   path="$(require_ready)"
-  # Route through the write_file workaround (agy issue #76). Default to an
-  # 8-minute timeout; agy usually writes the file within seconds.
+  # Route through the read-only transcript capture (agy issue #76). Default
+  # to an 8-minute timeout; agy usually answers within seconds.
   _agy_capture "$path" "$canonical" "${AGY_ASK_TIMEOUT:-8m0s}" "$prompt" "$@"
+}
+
+# /agy:scrape <url> [--model <alias>] — fetch a web page read-only and return
+# its main content as Markdown. The URL is validated by lib/inputguard.mjs
+# (http/https only; localhost / private / link-local / metadata blocked) to
+# prevent SSRF before agy ever touches it.
+cmd_scrape() {
+  local model_alias="" model_flag_seen=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model)
+        model_flag_seen=1
+        if [ $# -ge 2 ]; then model_alias="$2"; shift 2; else shift; fi ;;
+      --model=*) model_flag_seen=1; model_alias="${1#--model=}"; shift ;;
+      --)        shift; break ;;
+      *)         break ;;
+    esac
+  done
+  local canonical=""
+  [ "$model_flag_seen" -eq 1 ] && canonical="$(resolve_model_alias "$model_alias")"
+  local url="${1:-}"
+  if [ -z "$url" ]; then
+    echo "error: scrape requires a URL argument (http/https)" >&2
+    exit 64
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: /agy:scrape needs Node.js (URL validation + output capture)." >&2
+    exit 1
+  fi
+  local safe_url
+  if ! safe_url="$(node "$AGY_LIB_DIR/inputguard.mjs" scrape "$url" 2>&1)"; then
+    echo "error: refusing to scrape this URL — $safe_url" >&2
+    exit 65
+  fi
+  local path
+  path="$(require_ready)"
+  local prompt
+  prompt="$(printf 'Fetch the web page at the URL below and return its MAIN readable content as clean Markdown — preserve headings, lists, links, tables, and code blocks; drop nav/ads/boilerplate. Output ONLY the Markdown, no preamble.\n\nURL: %s' "$safe_url")"
+  _agy_capture "$path" "$canonical" "${AGY_SCRAPE_TIMEOUT:-5m0s}" "$prompt"
+}
+
+# /agy:doc-to-md <path> [--model <alias>] — convert a local document to
+# Markdown read-only. The path is validated by lib/inputguard.mjs (allow-
+# listed document extensions, real file, size cap, not under a sensitive
+# dir, symlinks resolved), then staged into the throwaway temp dir so agy
+# sees only that one file.
+cmd_doc_to_md() {
+  local model_alias="" model_flag_seen=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model)
+        model_flag_seen=1
+        if [ $# -ge 2 ]; then model_alias="$2"; shift 2; else shift; fi ;;
+      --model=*) model_flag_seen=1; model_alias="${1#--model=}"; shift ;;
+      --)        shift; break ;;
+      *)         break ;;
+    esac
+  done
+  local canonical=""
+  [ "$model_flag_seen" -eq 1 ] && canonical="$(resolve_model_alias "$model_alias")"
+  local input="${1:-}"
+  if [ -z "$input" ]; then
+    echo "error: doc-to-md requires a file path" >&2
+    exit 64
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: /agy:doc-to-md needs Node.js (path validation + output capture)." >&2
+    exit 1
+  fi
+  local real
+  if ! real="$(node "$AGY_LIB_DIR/inputguard.mjs" doc "$input" "$PWD" 2>&1)"; then
+    echo "error: refusing to convert this file — $real" >&2
+    exit 65
+  fi
+  local path
+  path="$(require_ready)"
+  local base
+  base="$(basename "$real")"
+  local prompt
+  prompt="$(printf 'Read the file named "%s" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown — no preamble, no commentary.' "$base")"
+  # Stage the validated file into the capture temp dir so agy reads only it.
+  AGY_CAPTURE_STAGE_FILE="$real" _agy_capture "$path" "$canonical" "${AGY_DOCTOMD_TIMEOUT:-8m0s}" "$prompt"
 }
 
 cmd_review() {
@@ -898,6 +987,9 @@ Slash commands
   /agy:review [focus]                   Send current `git diff` to agy for review.
   /agy:image [--name S] [--output P] <description>
                                         Generate an image via agy's built-in tool.
+  /agy:scrape [--model A] <url>         Fetch a web page (read-only) -> Markdown. SSRF-guarded.
+  /agy:doc-to-md [--model A] <path>     Convert a local doc (PDF/DOCX/HTML/...) -> Markdown,
+                                        read-only + path-guarded (allow-listed types only).
   /agy:help                             This help.
 
 Model selection (--model)
@@ -928,11 +1020,13 @@ main() {
   restore_orphaned_backup 2>/dev/null || true
 
   case "${1:-}" in
-    check)              cmd_check ;;
-    ask)     shift;     cmd_ask "$@" ;;
-    review)  shift;     cmd_review "$@" ;;
-    image)   shift;     cmd_image "$@" ;;
-    help|-h|--help|"")  cmd_help ;;
+    check)                cmd_check ;;
+    ask)       shift;     cmd_ask "$@" ;;
+    review)    shift;     cmd_review "$@" ;;
+    image)     shift;     cmd_image "$@" ;;
+    scrape)    shift;     cmd_scrape "$@" ;;
+    doc-to-md) shift;     cmd_doc_to_md "$@" ;;
+    help|-h|--help|"")    cmd_help ;;
     *)                  echo "error: unknown subcommand '$1'" >&2; cmd_help >&2; exit 64 ;;
   esac
 }

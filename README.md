@@ -46,6 +46,15 @@ have.
 - **`/agy:image <description>`** — generate an image with `agy`'s built-in
   `generate_image` tool (Imagen under the hood). Optional `--name` and
   `--output`.
+- **`/agy:scrape [--model <alias>] <url>`** — fetch a web page (read-only)
+  and return its main content as Markdown. The URL is SSRF-guarded
+  (http/https only; localhost / private / link-local / cloud-metadata hosts
+  refused) before `agy` fetches it.
+- **`/agy:doc-to-md [--model <alias>] <path>`** — convert a local document
+  (PDF, DOCX, HTML, …) to Markdown, read-only. The path is validated
+  (allow-listed document types only; not under `~/.ssh` / `~/.aws` /
+  `~/.gemini` / `/etc`; symlinks resolved) and staged into a temp dir so
+  `agy` sees only that one file.
 - **`/agy:review [focus]`** — ask Antigravity to review your current
   `git diff`. Sends an expanded diff (`-U25`) plus the full content of
   small changed files so `agy` sees imports/guards and doesn't raise

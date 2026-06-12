@@ -13,6 +13,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.7.0] - 2026-05-31 (limeflash fork)
+
+**Phase 3 — two new read-only commands.** Both run agy from a throwaway temp
+dir (the 0.6.2 read-only model) and validate their input up front, before agy
+is ever invoked.
+
+### Added
+- **`/agy:scrape <url>`** — fetch a web page and return its main content as
+  Markdown. The URL is validated by `lib/inputguard.mjs` first: http/https
+  only, and localhost / private (10, 172.16–31, 192.168, 100.64) / link-local
+  (169.254, incl. cloud metadata) / IPv6 loopback+ULA / integer+hex IP forms
+  are blocked (SSRF guard). Best-effort — no DNS resolution, so a public name
+  that *resolves* to an internal IP isn't caught.
+- **`/agy:doc-to-md <path>`** — convert a local document (PDF, DOCX, HTML, …)
+  to Markdown. The path is validated: allow-listed document extensions only
+  (so `.env` / `.pem` / `.key` / extension-less secrets are refused), a real
+  regular file, ≤ 10 MB, symlinks resolved, and **not** under a sensitive dir
+  (`~/.ssh`, `~/.aws`, `~/.gemini`, `/etc`, …). The validated file is staged
+  into the temp dir so agy sees only that one file.
+- `lib/inputguard.mjs` (+ a CLI) holding both deny-lists. 18 unit tests
+  (`lib.inputguard.test.mjs`) and bats refusal tests (`scrape_doc_guard.bats`).
+
+### Notes
+- agy auto-runs its read tools in `--print` mode, so `read_url_content`
+  (scrape) and `view_file` (doc-to-md) work with **no**
+  `--dangerously-skip-permissions`. Like all read-only commands, agy runs
+  from a temp dir — it can't touch your repo.
+- 236 unit tests + CI. Validated live on real agy 1.0.3 (scrape example.com →
+  Markdown; HTML → Markdown; a metadata IP and a `.env` file both refused).
+
 ## [0.6.2] - 2026-05-31 (limeflash fork)
 
 **Security fix — the read-only commands could still write to your repo.**

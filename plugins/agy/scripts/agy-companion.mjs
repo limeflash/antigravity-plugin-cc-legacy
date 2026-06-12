@@ -51,7 +51,7 @@ import {
 import { buildReviewPrompt, buildAdversarialPrompt } from "./lib/prompts.mjs";
 import { scanDiffForSecrets, scanTextForSecrets } from "./lib/secrets.mjs";
 
-const VERSION = "0.6.2";
+const VERSION = "0.7.0";
 
 const RESCUE_SCHEMA = {
   boolean: ["background", "wait", "resume", "fresh", "isolate", "allow-dirty"],
