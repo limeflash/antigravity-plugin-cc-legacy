@@ -96,6 +96,16 @@ describe("extractAnswerFromTranscript", () => {
       .join("\n");
     expect(extractAnswerFromTranscript(jsonl)).toBe("part one\n\npart two");
   });
+  it("skips narration (a PLANNER_RESPONSE carrying a tool_call), keeping only the final answer", () => {
+    const jsonl = [
+      { source: "MODEL", type: "PLANNER_RESPONSE", content: "I will read the file.", tool_calls: [{ name: "view_file" }] },
+      { source: "MODEL", type: "VIEW_FILE", content: "file contents to skip" },
+      { source: "MODEL", type: "PLANNER_RESPONSE", content: "# Final\n\nclean" },
+    ]
+      .map((o) => JSON.stringify(o))
+      .join("\n");
+    expect(extractAnswerFromTranscript(jsonl)).toBe("# Final\n\nclean");
+  });
   it("tolerates blank and malformed lines", () => {
     const jsonl = `\n{ not json }\n${JSON.stringify({ source: "MODEL", type: "PLANNER_RESPONSE", content: "ok" })}\n\n`;
     expect(extractAnswerFromTranscript(jsonl)).toBe("ok");

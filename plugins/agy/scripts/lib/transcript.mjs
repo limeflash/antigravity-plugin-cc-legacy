@@ -83,11 +83,14 @@ export function parseConversationId(logText) {
 }
 
 /**
- * Extract the model's own answer from a transcript.jsonl: concatenate the
- * `content` of every MODEL / PLANNER_RESPONSE line (the model's text),
- * skipping tool-call lines (PLANNER_RESPONSE with `tool_calls` and no
- * content) and tool-result lines (type LIST_DIRECTORY / VIEW_FILE / ...).
- * Returns "" if none found.
+ * Extract the model's FINAL answer from a transcript.jsonl: concatenate the
+ * `content` of MODEL / PLANNER_RESPONSE lines that carry NO tool call.
+ *
+ * agy narrates intermediate steps ("I will read the file…") as
+ * PLANNER_RESPONSE lines that have BOTH `content` AND a `tool_calls` entry —
+ * those are thinking-out-loud, not the answer, so we skip any line with a
+ * tool call and keep only the terminal response(s). Also skips tool-result
+ * lines (type LIST_DIRECTORY / VIEW_FILE / …). Returns "" if none found.
  */
 export function extractAnswerFromTranscript(jsonlText) {
   if (!jsonlText) return "";
@@ -101,10 +104,12 @@ export function extractAnswerFromTranscript(jsonlText) {
     } catch {
       continue; // tolerate a partially-flushed trailing line
     }
+    const hasToolCall = Array.isArray(o?.tool_calls) && o.tool_calls.length > 0;
     if (
       o &&
       o.source === "MODEL" &&
       o.type === "PLANNER_RESPONSE" &&
+      !hasToolCall &&
       typeof o.content === "string" &&
       o.content.trim()
     ) {

@@ -107,7 +107,11 @@ commands; the Bash wrapper above keeps working without it.
   on first run.
 - **Auth** for `agy`: either OAuth cached in the system keyring (after one
   interactive run of `agy`) or `ANTIGRAVITY_API_KEY` exported in your shell.
-- **Bash** and **git** in `PATH`. macOS, Linux, or WSL.
+- **Bash** + **git** in `PATH` (macOS / Linux / WSL / Windows git-bash) for
+  the full command set. On **native Windows without bash**, the read-only
+  commands (`/agy:ask`, `/agy:scrape`, `/agy:doc-to-md`) also run via the
+  PowerShell entry — `powershell -ExecutionPolicy Bypass -File
+  "<plugin>/scripts/agy-run.ps1" <cmd> <args>` (needs **Node.js**).
 
 ## Install
 
@@ -342,10 +346,11 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
   - [x] CI: shellcheck + bats + vitest matrix (Node 18.18 / 20 / 22).
   - [ ] Optional Stop-gate review hook (deferred — the hook can block
         Claude responses; wants a careful safety review first).
-- **Phase 3 — Antigravity-specific** (not started)
-  - [ ] Safe `/agy:scrape`, `/agy:doc-to-md` (no auto-approve, deny-list
-        on input paths/URLs).
-  - [ ] Windows-native (PowerShell) port.
+- **Phase 3 — Antigravity-specific** (shipped in 0.7.x)
+  - [x] Safe `/agy:scrape`, `/agy:doc-to-md` (read-only, deny-list on input
+        URLs/paths) — v0.7.0.
+  - [x] Windows-native PowerShell entry for the read-only commands
+        (`agy-run.ps1`: ask / scrape / doc-to-md) — v0.7.1.
 
 See [CHANGELOG.md](./CHANGELOG.md) for shipped changes.
 

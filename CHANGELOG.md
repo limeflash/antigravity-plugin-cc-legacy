@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.7.1] - 2026-05-31 (limeflash fork)
+
+### Added
+- **Native Windows PowerShell entry — `scripts/agy-run.ps1`** — for the
+  read-only commands (`ask`, `scrape`, `doc-to-md`), so Windows users without
+  git-bash can use them. Same read-only model (agy runs from a throwaway temp
+  dir), reusing `lib/transcript.mjs` (capture) and `lib/inputguard.mjs`
+  (URL/path deny-lists); native Windows paths, no cygpath. Validated live on
+  Windows PowerShell 5.1 (ask → 42; scrape/​doc-to-md allowed → Markdown,
+  blocked → exit 65 with a clean message).
+
+### Fixed
+- **Cleaner command output.** The transcript extractor now skips agy's
+  intermediate narration — `PLANNER_RESPONSE` lines that carry a `tool_call`
+  ("I will read the file…") — and keeps only the final answer. Affects every
+  command that captures from the transcript: `/agy:scrape` and `/agy:doc-to-md`
+  now return just the Markdown, and `/agy:review` drops the "I will start by
+  reviewing…" preamble. Surfaced by dogfooding the new PowerShell `doc-to-md`.
+
+237 unit tests.
+
 ## [0.7.0] - 2026-05-31 (limeflash fork)
 
 **Phase 3 — two new read-only commands.** Both run agy from a throwaway temp
