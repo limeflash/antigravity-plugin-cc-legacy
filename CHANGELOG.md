@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
 > the upstream history, preserved for traceability.
 
+## [0.7.2] - 2026-05-31 (limeflash fork)
+
+**Security hardening of the Phase-3 commands**, from an adversarial
+`/agy:adversarial-review` pass on the 0.7.x code (dogfooding the plugin on
+itself). The review's verdict was RETHINK; all five findings are fixed.
+
+### Fixed
+- **SSRF bypasses via IPv6 / DNS encodings.** `isBlockedHost` now decodes
+  IPv4-in-IPv6 forms — `::ffff:7f00:1` (hex v4-mapped), `::127.0.0.1`
+  (v4-compatible), `::ffff:HHHH:HHHH` — and blocks them, plus hostnames that
+  embed a private/loopback IPv4 as leading labels (`127.0.0.1.nip.io`,
+  `10.0.0.1.sslip.io`). Public addresses (`::ffff:8.8.8.8`, `8.8.8.8.nip.io`)
+  still pass.
+- **Windows UNC / device path bypass.** `validateDocPath` rejects UNC (`\\…`)
+  and device (`\\?\`, `\\.\`) paths, which previously slipped past the
+  drive-letter sensitive-dir check (`\\localhost\c$\Users\<u>\.ssh\notes.txt`
+  read `~/.ssh`).
+- **TOCTOU symlink swap on staging.** doc-to-md now stages via a single Node
+  step (`inputguard stage`: `lstat` → reject symlink → copy) instead of a
+  shell `cp` / `Copy-Item` that re-follows the path. A file swapped for a
+  symlink between validation and staging is caught.
+- **Prompt injection via filename.** The staged file gets a FIXED name
+  (`document.<ext>`); the untrusted original filename is never interpolated
+  into agy's prompt.
+- **PowerShell argument splitting.** `agy-run.ps1` no longer uses
+  `Start-Process -ArgumentList` (which splits spaced paths and enabled
+  argument injection); it launches Node via `System.Diagnostics.Process` with
+  proper Windows arg quoting — paths with spaces now work.
+
+### Changed (defense in depth)
+- agy's environment is stripped of repo-location hints (`CLAUDE_PROJECT_DIR`,
+  `GIT_DIR`, `GIT_WORK_TREE`, …) for the read-only commands, in both the Bash
+  and PowerShell wrappers.
+
+245 unit tests (8 new for the SSRF / UNC / staging cases).
+
 ## [0.7.1] - 2026-05-31 (limeflash fork)
 
 ### Added

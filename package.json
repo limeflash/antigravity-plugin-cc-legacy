@@ -1,6 +1,6 @@
 {
   "name": "@limeflash/antigravity-plugin-cc",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "Antigravity CLI plugin for Claude Code — fork extended toward codex-plugin-cc parity. The Node.js companion handles background job control (/agy:rescue, /agy:status, /agy:result, /agy:cancel); the Bash wrapper still handles synchronous /agy:* commands.",
   "license": "MIT",

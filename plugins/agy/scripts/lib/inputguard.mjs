@@ -11,10 +11,28 @@
 // internal IP; this guard blocks the obvious literal targets and bad schemes.
 
 import path from "node:path";
-import { promises as fsp, realpathSync } from "node:fs";
+import { promises as fsp, realpathSync, lstatSync, statSync, copyFileSync } from "node:fs";
 import os from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+
+/**
+ * Decode an IPv4 address embedded in an IPv6 literal — v4-mapped
+ * (`::ffff:a.b.c.d` / `::ffff:HHHH:HHHH`) or v4-compatible (`::a.b.c.d` /
+ * `::HHHH:HHHH`) — and return it dotted, or null. Used so an embedded
+ * loopback/private v4 can't slip past the SSRF guard via IPv6 encoding.
+ */
+function embeddedIPv4(host) {
+  let m = host.match(/^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (m) return m[1];
+  m = host.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (m) {
+    const hi = parseInt(m[1], 16);
+    const lo = parseInt(m[2], 16);
+    return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // /agy:scrape — URL validation
@@ -42,7 +60,8 @@ export function isBlockedHost(hostname) {
     if (host === "::1" || host === "::") return true;        // loopback / unspecified
     if (host.startsWith("fe80:")) return true;               // link-local
     if (/^f[cd][0-9a-f]*:/.test(host)) return true;          // ULA fc00::/7
-    if (host.startsWith("::ffff:")) return isBlockedHost(host.slice("::ffff:".length)); // v4-mapped
+    const embedded = embeddedIPv4(host);                     // v4-mapped / v4-compatible
+    if (embedded) return isBlockedHost(embedded);
     return false;                                            // other public IPv6
   }
 
@@ -51,6 +70,12 @@ export function isBlockedHost(hostname) {
   if (/^0x[0-9a-f]+$/.test(host)) return true;
   // Dotted form with an octal (leading-zero) octet — ambiguous, block.
   if (/\./.test(host) && host.split(".").some((p) => /^0\d/.test(p))) return true;
+
+  // Hostname that EMBEDS a dotted IPv4 as its leading labels
+  // (127.0.0.1.nip.io, 10.0.0.1.sslip.io) — block if those labels form a
+  // blocked IP. Best-effort against the common public-DNS-to-private trick.
+  const lead = host.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\./);
+  if (lead && isBlockedHost(lead[1])) return true;
 
   // Dotted IPv4.
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -130,6 +155,11 @@ export function isSensitivePath(realPath, homedir = os.homedir()) {
   return sensitive.some(under);
 }
 
+/** True for a UNC (\\server\share) or device (\\?\, \\.\, //server) path. */
+export function isUncPath(p) {
+  return /^[\\/]{2}/.test(String(p));
+}
+
 /**
  * Validate a /agy:doc-to-md path. Resolves symlinks first (so a symlinked
  * .pdf pointing at ~/.ssh/id_rsa is caught), then enforces: regular file,
@@ -142,11 +172,20 @@ export async function validateDocPath(raw, opts = {}) {
   }
   const cwd = opts.cwd || process.cwd();
   const abs = path.resolve(cwd, raw.trim());
+  // Reject UNC (\\server\share\...) and device (\\?\, \\.\) paths: a document
+  // shouldn't be one, and they bypass the drive-letter sensitive-dir prefix
+  // check (e.g. \\localhost\c$\Users\<user>\.ssh\notes.txt reads ~/.ssh).
+  if (isUncPath(abs)) {
+    return { ok: false, reason: "UNC / device paths are not allowed" };
+  }
   let real;
   try {
     real = realpathSync(abs);
   } catch {
     return { ok: false, reason: "file does not exist" };
+  }
+  if (isUncPath(real)) {
+    return { ok: false, reason: "path resolves to a UNC / device path" };
   }
   let st;
   try {
@@ -166,6 +205,32 @@ export async function validateDocPath(raw, opts = {}) {
     return { ok: false, reason: "path resolves under a sensitive directory" };
   }
   return { ok: true, path: real, ext };
+}
+
+/**
+ * TOCTOU-resistant staging: lstat the source (rejecting a symlink that may
+ * have been swapped in AFTER validateDocPath resolved the real path), confirm
+ * a regular file within the size cap, then copy it to `dest`. Done in one Node
+ * step so the check-to-copy window is microseconds, not a separate shell `cp`
+ * that re-follows the path (and would dereference a freshly-planted symlink).
+ */
+export function stageFile(src, dest) {
+  if (!src || !dest) return { ok: false, reason: "stage requires <src> <dest>" };
+  let st;
+  try {
+    st = lstatSync(src);
+  } catch {
+    return { ok: false, reason: "source file is gone" };
+  }
+  if (st.isSymbolicLink()) return { ok: false, reason: "source became a symlink (TOCTOU)" };
+  if (!st.isFile()) return { ok: false, reason: "source is not a regular file" };
+  if (st.size > MAX_DOC_BYTES) return { ok: false, reason: "source too large" };
+  try {
+    copyFileSync(src, dest);
+  } catch (e) {
+    return { ok: false, reason: `copy failed: ${e.message}` };
+  }
+  return { ok: true, path: dest };
 }
 
 // ---------------------------------------------------------------------------
@@ -189,8 +254,9 @@ if (isMainModule()) {
     let res;
     if (kind === "scrape") res = validateScrapeUrl(input);
     else if (kind === "doc") res = await validateDocPath(input, { cwd });
+    else if (kind === "stage") res = stageFile(input, cwd); // input=src, cwd=argv[4]=dest
     else {
-      process.stderr.write(`inputguard: unknown kind '${kind}' (expected scrape|doc)\n`);
+      process.stderr.write(`inputguard: unknown kind '${kind}' (expected scrape|doc|stage)\n`);
       process.exit(2);
     }
     if (res.ok) {

@@ -43,26 +43,43 @@ function Get-Timeout {
   return $Default
 }
 
-# Run a Node helper as a separate process (Start-Process) with stdout/stderr
-# redirected to files. Avoids PowerShell wrapping a native command's stderr in
-# a NativeCommandError (which, under ErrorActionPreference='Stop', throws even
-# with 2> redirection). Returns an object with Code / Out / Err.
+# Quote a single argument per the Windows CommandLineToArgvW rules, so paths
+# with spaces (or embedded quotes) survive intact. PowerShell 5.1's
+# Start-Process -ArgumentList joins an array with naive quoting and SPLITS
+# spaced paths — an argument-injection / validation-bypass vector — so we
+# build the command line ourselves and launch via System.Diagnostics.Process.
+function ConvertTo-NativeArg([string]$a) {
+  if ($a -eq '') { return '""' }
+  if ($a -notmatch '[\s"]') { return $a }
+  $s = $a -replace '(\\*)"', '$1$1\"'   # double backslashes before a quote, escape the quote
+  $s = $s -replace '(\\+)$', '$1$1'     # double a trailing backslash run (precedes the closing quote)
+  return '"' + $s + '"'
+}
+
+# Run a Node helper as a child process with stdout/stderr captured. Avoids
+# PowerShell wrapping a native command's stderr in a NativeCommandError (which
+# throws under ErrorActionPreference='Stop') AND the Start-Process arg-splitting
+# bug. Returns an object with Code / Out / Err.
 function Get-NodeResult {
   param([Parameter(Mandatory = $true)][string]$Script, [string[]]$NodeArgs = @())
-  $outF = [System.IO.Path]::GetTempFileName()
-  $errF = [System.IO.Path]::GetTempFileName()
-  try {
-    $argList = @($Script) + $NodeArgs
-    $proc = Start-Process -FilePath 'node' -ArgumentList $argList -NoNewWindow -Wait -PassThru `
-      -RedirectStandardOutput $outF -RedirectStandardError $errF
-    $out = Get-Content -Raw -LiteralPath $outF -ErrorAction SilentlyContinue
-    $err = Get-Content -Raw -LiteralPath $errF -ErrorAction SilentlyContinue
-    $o = ''; if ($out) { $o = $out.Trim() }
-    $e = ''; if ($err) { $e = $err.Trim() }
-    return [pscustomobject]@{ Code = $proc.ExitCode; Out = $o; Err = $e }
-  } finally {
-    Remove-Item -LiteralPath $outF, $errF -Force -ErrorAction SilentlyContinue
-  }
+  $all = @($Script) + $NodeArgs
+  $argStr = ($all | ForEach-Object { ConvertTo-NativeArg $_ }) -join ' '
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'node'
+  $psi.Arguments = $argStr
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  # Read stderr async to avoid a pipe-buffer deadlock when stdout is large.
+  $errTask = $proc.StandardError.ReadToEndAsync()
+  $out = $proc.StandardOutput.ReadToEnd()
+  $proc.WaitForExit()
+  $err = $errTask.Result
+  $o = ''; if ($out) { $o = $out.Trim() }
+  $e = ''; if ($err) { $e = $err.Trim() }
+  return [pscustomobject]@{ Code = $proc.ExitCode; Out = $o; Err = $e }
 }
 
 # Run agy read-only from a throwaway temp dir and return its answer (captured
@@ -73,13 +90,21 @@ function Invoke-AgyCapture {
     [Parameter(Mandatory = $true)][string]$Agy,
     [Parameter(Mandatory = $true)][string]$Timeout,
     [Parameter(Mandatory = $true)][string]$Prompt,
-    [string]$StageFile
+    [string]$StageFile,
+    [string]$StageAs = 'document'
   )
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('agy-' + [System.IO.Path]::GetRandomFileName())
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   try {
     if ($StageFile) {
-      Copy-Item -LiteralPath $StageFile -Destination $tmp -Force
+      # Stage via the Node helper (lstat + copy in one step, TOCTOU-resistant)
+      # under a fixed name, rather than Copy-Item which re-follows the path.
+      $dest = Join-Path $tmp $StageAs
+      $sg = Get-NodeResult -Script (Join-Path $script:LibDir 'inputguard.mjs') -NodeArgs @('stage', $StageFile, $dest)
+      if ($sg.Code -ne 0) {
+        [Console]::Error.WriteLine("error: could not stage the input file - $($sg.Err)")
+        exit 1
+      }
     }
     $log = Join-Path $tmp 'agy-run.log'
 
@@ -87,11 +112,22 @@ function Invoke-AgyCapture {
     # --add-dir, so it has no path to write there - same model as 0.6.2).
     # Pipe $null to close stdin (dodges the #76 non-TTY hang); discard agy's
     # stdout (empty under #76) and stderr.
+    # Strip repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from agy's env as
+    # defense in depth, so it can't target the host repo by absolute path.
+    $stripVars = @('CLAUDE_PROJECT_DIR', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')
+    $savedEnv = @{}
+    foreach ($v in $stripVars) {
+      $savedEnv[$v] = [Environment]::GetEnvironmentVariable($v)
+      if ($null -ne $savedEnv[$v]) { Remove-Item -Path "Env:\$v" -ErrorAction SilentlyContinue }
+    }
     Push-Location $tmp
     try {
       $null | & $Agy --sandbox --add-dir $tmp --log-file $log --print-timeout $Timeout --print $Prompt *> $null
     } finally {
       Pop-Location
+      foreach ($v in $stripVars) {
+        if ($null -ne $savedEnv[$v]) { Set-Item -Path "Env:\$v" -Value $savedEnv[$v] }
+      }
     }
 
     $res = Get-NodeResult -Script (Join-Path $script:LibDir 'transcript.mjs') -NodeArgs @($log, $tmp)
@@ -141,9 +177,12 @@ function Invoke-DocToMd {
   $g = Get-NodeResult -Script (Join-Path $script:LibDir 'inputguard.mjs') -NodeArgs @('doc', $inPath, (Get-Location).Path)
   if ($g.Code -ne 0) { [Console]::Error.WriteLine("error: refusing to convert this file - $($g.Err)"); exit 65 }
   $real = $g.Out
-  $base = [System.IO.Path]::GetFileName($real)
-  $prompt = "Read the file named ""$base"" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown - no preamble, no commentary."
-  Invoke-AgyCapture -Agy $agy -Timeout (Get-Timeout 'AGY_DOCTOMD_TIMEOUT' '8m0s') -Prompt $prompt -StageFile $real
+  # Fixed staged name derived only from the validated extension — the
+  # untrusted original filename is never put in the prompt (injection guard).
+  $ext = [System.IO.Path]::GetExtension($real).TrimStart('.').ToLower()
+  $staged = "document.$ext"
+  $prompt = "Read the file named ""$staged"" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown - no preamble, no commentary."
+  Invoke-AgyCapture -Agy $agy -Timeout (Get-Timeout 'AGY_DOCTOMD_TIMEOUT' '8m0s') -Prompt $prompt -StageFile $real -StageAs $staged
 }
 
 function Show-Help {

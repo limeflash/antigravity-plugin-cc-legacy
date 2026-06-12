@@ -424,10 +424,19 @@ _agy_capture() {
   local logfile="$outdir/agy-run.log"
   # Optional: stage a single (caller-validated) input file into the temp dir
   # so a read-only command (e.g. /agy:doc-to-md) can hand agy a file to read
-  # without exposing the rest of the filesystem. agy runs from $outdir with
-  # only $outdir in --add-dir, so it sees this copy and nothing else.
-  if [ -n "${AGY_CAPTURE_STAGE_FILE:-}" ] && [ -f "${AGY_CAPTURE_STAGE_FILE}" ]; then
-    cp "${AGY_CAPTURE_STAGE_FILE}" "$outdir/" 2>/dev/null || true
+  # without exposing the rest of the filesystem. We stage via the Node helper
+  # (lstat + copy in ONE step) rather than a shell `cp`: it rejects a symlink
+  # swapped in after validation (TOCTOU) and copies to a FIXED name so the
+  # untrusted original filename never reaches agy's prompt. agy runs from
+  # $outdir with only $outdir in --add-dir, so it sees this copy and nothing
+  # else.
+  if [ -n "${AGY_CAPTURE_STAGE_FILE:-}" ]; then
+    local stage_as="${AGY_CAPTURE_STAGE_AS:-document}"
+    if ! node "$AGY_LIB_DIR/inputguard.mjs" stage "$AGY_CAPTURE_STAGE_FILE" "$outdir/$stage_as" >/dev/null 2>&1; then
+      echo "error: could not stage the input file (it may have been swapped, removed, or is unreadable)." >&2
+      rm -rf "$outdir"
+      return 1
+    fi
   fi
   # agy may be a Windows .exe invoked from Git Bash, which needs native
   # Windows paths for --add-dir / --log-file / cwd.
@@ -476,14 +485,17 @@ _agy_capture() {
   # with --sandbox + --add-dir <tmp> + --log-file and NO
   # --dangerously-skip-permissions / NO write_file. Running outside the repo
   # is what actually enforces read-only (see the cwd note above).
-  # </dev/null dodges the non-TTY stdin hang; stdout is empty under #76 (we
-  # read the transcript instead).
+  # `env -u …` strips the repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from
+  # agy's environment as defense in depth, so it can't trivially target the
+  # host repo by absolute path. </dev/null dodges the non-TTY stdin hang;
+  # stdout is empty under #76 (we read the transcript instead).
+  local -a agy_env=(env -u CLAUDE_PROJECT_DIR -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR)
   if [ "$use_override" -eq 1 ]; then
-    ( cd "$outdir" && with_model_override "$canonical" -- "$agy" --sandbox \
+    ( cd "$outdir" && with_model_override "$canonical" -- "${agy_env[@]}" "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
       </dev/null >/dev/null 2>&1 ) || true
   else
-    ( cd "$outdir" && "$agy" --sandbox \
+    ( cd "$outdir" && "${agy_env[@]}" "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
       </dev/null >/dev/null 2>&1 ) || true
   fi
@@ -711,12 +723,15 @@ cmd_doc_to_md() {
   fi
   local path
   path="$(require_ready)"
-  local base
-  base="$(basename "$real")"
+  # Stage under a FIXED name derived only from the validated extension — the
+  # untrusted original filename is never interpolated into the prompt (prompt
+  # injection guard).
+  local ext; ext="$(printf '%s' "${real##*.}" | tr '[:upper:]' '[:lower:]')"
+  local staged="document.${ext}"
   local prompt
-  prompt="$(printf 'Read the file named "%s" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown — no preamble, no commentary.' "$base")"
-  # Stage the validated file into the capture temp dir so agy reads only it.
-  AGY_CAPTURE_STAGE_FILE="$real" _agy_capture "$path" "$canonical" "${AGY_DOCTOMD_TIMEOUT:-8m0s}" "$prompt"
+  prompt="$(printf 'Read the file named "%s" in your workspace and convert it to clean, well-structured Markdown. Preserve headings, lists, tables, links, and code blocks. Output ONLY the Markdown — no preamble, no commentary.' "$staged")"
+  AGY_CAPTURE_STAGE_FILE="$real" AGY_CAPTURE_STAGE_AS="$staged" \
+    _agy_capture "$path" "$canonical" "${AGY_DOCTOMD_TIMEOUT:-8m0s}" "$prompt"
 }
 
 cmd_review() {

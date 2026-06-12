@@ -1,6 +1,6 @@
 {
   "name": "agy",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Use the Google Antigravity CLI (`agy`) from inside Claude Code. Synchronous Bash wrapper: /agy:setup, /agy:ask, /agy:delegate, /agy:research, /agy:review, /agy:image, /agy:scrape, /agy:doc-to-md, /agy:help. Node.js companion: /agy:rescue (background-capable), /agy:status, /agy:result, /agy:cancel. Read-only commands run agy outside your repo; scrape/doc-to-md add SSRF + path deny-lists. Per-call model selection via --model. Fork of simplybychris/antigravity-plugin-cc.",
   "author": {
     "name": "limeflash",

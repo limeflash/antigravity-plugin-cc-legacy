@@ -8,6 +8,8 @@ import {
   validateScrapeUrl,
   isSensitivePath,
   validateDocPath,
+  isUncPath,
+  stageFile,
 } from "../plugins/agy/scripts/lib/inputguard.mjs";
 
 describe("isBlockedHost (SSRF guard)", () => {
@@ -38,6 +40,21 @@ describe("isBlockedHost (SSRF guard)", () => {
     for (const h of ["::1", "[::1]", "fe80::1", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1"]) {
       expect(isBlockedHost(h)).toBe(true);
     }
+  });
+  it("blocks IPv4-in-IPv6 hex/compat encodings (adversarial SSRF bypass)", () => {
+    // 7f00:1 == 127.0.0.1, 0a00:1 == 10.0.0.1
+    for (const h of ["::ffff:7f00:1", "::7f00:1", "::127.0.0.1", "::ffff:0a00:1"]) {
+      expect(isBlockedHost(h)).toBe(true);
+    }
+  });
+  it("allows a public v4-mapped IPv6 but blocks a private one", () => {
+    expect(isBlockedHost("::ffff:8.8.8.8")).toBe(false);
+    expect(isBlockedHost("::ffff:192.168.1.1")).toBe(true);
+  });
+  it("blocks hostnames embedding a private IPv4 as leading labels (nip.io trick)", () => {
+    expect(isBlockedHost("127.0.0.1.nip.io")).toBe(true);
+    expect(isBlockedHost("10.0.0.1.sslip.io")).toBe(true);
+    expect(isBlockedHost("8.8.8.8.nip.io")).toBe(false); // public embedded → allowed
   });
   it("blocks integer / hex / octal encoded IPs", () => {
     expect(isBlockedHost("2130706433")).toBe(true); // 127.0.0.1
@@ -143,5 +160,56 @@ describe("validateDocPath", () => {
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/sensitive/);
     await fsp.rm(fakeHome, { recursive: true, force: true });
+  });
+});
+
+describe("isUncPath", () => {
+  it("flags UNC and device paths", () => {
+    expect(isUncPath("\\\\localhost\\c$\\Users\\u\\.ssh\\id_rsa")).toBe(true);
+    expect(isUncPath("\\\\?\\C:\\x")).toBe(true);
+    expect(isUncPath("//server/share/x")).toBe(true);
+  });
+  it("does not flag ordinary paths", () => {
+    expect(isUncPath("C:\\Users\\u\\doc.pdf")).toBe(false);
+    expect(isUncPath("/home/u/doc.pdf")).toBe(false);
+    expect(isUncPath("doc.pdf")).toBe(false);
+  });
+});
+
+describe("stageFile (TOCTOU-resistant staging)", () => {
+  let dir;
+  beforeEach(async () => {
+    dir = await fsp.mkdtemp(path.join(os.tmpdir(), "agy-stage-"));
+  });
+  afterEach(async () => {
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it("copies a regular file to the destination", async () => {
+    const src = path.join(dir, "src.md");
+    await fsp.writeFile(src, "hello");
+    const dest = path.join(dir, "document.md");
+    const r = stageFile(src, dest);
+    expect(r.ok).toBe(true);
+    expect(await fsp.readFile(dest, "utf8")).toBe("hello");
+  });
+
+  it("rejects a missing source and missing args", () => {
+    expect(stageFile(path.join(dir, "nope"), path.join(dir, "d")).ok).toBe(false);
+    expect(stageFile("", "").ok).toBe(false);
+  });
+
+  it("rejects a symlink source (the TOCTOU swap vector)", async () => {
+    const target = path.join(dir, "secret");
+    await fsp.writeFile(target, "secret");
+    const link = path.join(dir, "link.md");
+    try {
+      await fsp.symlink(target, link);
+    } catch {
+      return; // symlink not permitted on this host (e.g. Windows w/o privilege) — skip
+    }
+    const r = stageFile(link, path.join(dir, "out.md"));
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/symlink/);
   });
 });
