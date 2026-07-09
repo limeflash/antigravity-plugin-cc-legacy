@@ -1,33 +1,62 @@
-# agy — Antigravity CLI plugin for Claude Code (limeflash fork)
+# agy — the Antigravity CLI plugin for Claude Code
 
-> **Fork notice.** This is a fork of
-> [`simplybychris/antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc)
-> maintained by [@limeflash](https://github.com/limeflash). The upstream
-> is deliberately small ("just Bash and `agy`"); this fork extends it
-> toward feature parity with
-> [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc):
-> background job control (`/agy:status`, `/agy:result`, `/agy:cancel`),
-> branch-base code review (`--base <ref>`), adversarial review,
-> rescue safety rails (`--isolate`), and a CI-tested wrapper. See
-> [NOTICE](./NOTICE) and [CHANGELOG.md](./CHANGELOG.md) for what changed.
->
-> **Status (v0.6.1):** the read-only commands (`/agy:ask`, `/agy:review`,
-> `/agy:adversarial-review`) run with **no** `--dangerously-skip-permissions`
-> — output is read from `agy`'s own on-disk transcript. Validated end-to-end
-> against a real `agy` 1.0.3 install on **Windows (git-bash)**, **WSL2
-> Ubuntu**, and **macOS 26.5**; 218 unit tests + CI (shellcheck, bats, vitest
-> on Node 18/20/22). Hardened by dogfooding the plugin's own
-> `/agy:review` / `/agy:adversarial-review` on its own code plus an
-> adversarial security pass — secret-scanner coverage gaps and a macOS
-> symlink bug fixed (see [CHANGELOG.md](./CHANGELOG.md)).
+[![CI](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml/badge.svg)](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/limeflash/antigravity-plugin-cc?sort=semver&color=blue)](https://github.com/limeflash/antigravity-plugin-cc/releases)
+[![Tests](https://img.shields.io/badge/tests-245%20passing-brightgreen)](#tested--dogfooded)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20·%20macOS%20·%20Linux%20·%20WSL-informational)](#requirements)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518.18-339933)](#requirements)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-Use Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from
-inside Claude Code. Delegate tasks to the `agy:runner` subagent, run quick
-prompts, or get a second-opinion code review — without leaving your editor.
+**Call Google's [Antigravity CLI (`agy`)](https://antigravity.google/) from inside Claude Code** — ask
+questions, review your diff, delegate coding tasks, scrape the web, convert
+documents to Markdown — all without leaving your editor.
+
+What sets it apart: the read-only commands come with a **real read-only
+guarantee** — `agy` runs from a throwaway temp directory and *cannot touch
+your repository* — and everything that leaves your machine is guarded
+(credential scan before anything reaches Gemini, SSRF deny-list on URLs,
+sensitive-path deny-list on files). Cross-platform, **245 unit tests**, CI
+green.
+
+> **Latest — v0.8.0.** Now on **agy 1.1.0** with **direct stdout capture** (the
+> #76 workaround is now just a fallback). 13 slash commands · read-only
+> guarantee · secret / SSRF / path guards · background job control · native
+> Windows PowerShell entry.
+> Validated end-to-end against a real `agy` 1.1.0 install on **Windows
+> (git-bash)**, **WSL2 Ubuntu**, and **macOS 26.5**. Hardened by dogfooding the
+> plugin's own `/agy:review` and `/agy:adversarial-review` on its own code —
+> a self-run adversarial pass found and fixed real SSRF / path / TOCTOU bugs
+> (see the [CHANGELOG](./CHANGELOG.md)).
+
+## Why this plugin
+
+- 🔒 **Read-only means read-only.** `/agy:ask`, `/agy:review`, `/agy:scrape`,
+  `/agy:doc-to-md` run `agy` from a temp dir with **no**
+  `--dangerously-skip-permissions` and your repo unreachable — even though
+  `agy` executes tools, it has no path to write into your project.
+  ([how it works](#how-output-is-captured-agy-issue-76) · [SECURITY.md](./SECURITY.md))
+- 🛡️ **Guards what leaves your machine.** Diffs *and full changed-file
+  content* are scanned for credentials before being sent to Gemini; scrape
+  URLs are SSRF-filtered (localhost / private / link-local / cloud-metadata /
+  IPv6-mapped / `nip.io`); document paths are extension-allow-listed and
+  blocked under `~/.ssh` / `~/.aws` / `~/.gemini` / `/etc`.
+- 🧰 **13 commands, one plugin.** ask · delegate · research · review ·
+  adversarial-review · rescue · scrape · doc-to-md · image · status · result ·
+  cancel · setup.
+- ⚙️ **Background job control.** Long tasks run detached with real job records
+  (`/agy:status`, `/agy:result`, `/agy:cancel`); `rescue --isolate` edits a
+  throwaway `git worktree` and hands you a reviewable patch — your real tree is
+  never touched.
+- 💻 **Cross-platform.** A Bash wrapper (macOS / Linux / WSL / Windows
+  git-bash) + a Node companion + a native **PowerShell** entry for Windows
+  without bash.
+- ✅ **Tested & dogfooded.** 245 unit tests, a shellcheck + bats + vitest CI
+  matrix (Node 18 / 20 / 22), and the plugin reviews *itself* — that's how the
+  hardest bugs were found.
 
 This plugin is for Claude Code users who already use (or want to start using)
-Antigravity and want a smooth way to call it from the workflow they already
-have.
+Antigravity and want a smooth, safe way to call it from the workflow they
+already have.
 
 ## What you get
 
@@ -69,9 +98,10 @@ have.
 ### Node.js companion (Phase 2 — Node 18.18+ required)
 
 Stateful workflows with persistent job records under
-`<repo>/.agy-plugin/`. Re-implementation of the codex-plugin-cc pattern
-adapted for `agy`. Node.js is **only** needed if you use these
-commands; the Bash wrapper above keeps working without it.
+`<repo>/.agy-plugin/` — background jobs, branch-base review, adversarial
+review, and a job lifecycle you can inspect and cancel. Node.js is **only**
+needed if you use these commands; the Bash wrapper above keeps working without
+it.
 
 - **`/agy:rescue [--isolate] [--allow-dirty] [--background] [--wait] [--resume|--fresh] [--model <alias>] <task>`**
   — like `/agy:delegate`, but with our own job control **and safety
@@ -122,12 +152,6 @@ In Claude Code, run these three slash commands in order:
 /plugin install agy@limeflash-antigravity
 /reload-plugins
 ```
-
-> Prefer the upstream? Swap the first two lines for
-> `/plugin marketplace add simplybychris/antigravity-plugin-cc` and
-> `/plugin install agy@antigravity-cc`. The slash command surface
-> (`/agy:*`) is identical; the fork adds capabilities, it doesn't rename
-> existing ones.
 
 Then verify everything is wired up:
 
@@ -246,32 +270,29 @@ Claude Code  →  /agy:*  →  agy-run.sh (Bash)        →  agy --print "<promp
 
 ### How output is captured (agy issue #76)
 
-On `agy` 1.0.3, `agy --print` flushes **zero bytes to a non-TTY
-stdout** — the response is generated (`Drip stopped: length=N` in the
-log) but the "drip" writer only targets a real terminal. Since the
-plugin always runs `agy` from a subprocess, capturing stdout returns
-nothing. (`agy --print` also *hangs* on a non-TTY stdin that never
-EOFs, so the plugin always closes stdin.)
+The plugin reads the answer from `agy`'s **stdout**. On older `agy`
+(< 1.0.15) a bug (#76) swallowed non-TTY stdout — `agy --print` generated the
+response but flushed nothing to a pipe — so the plugin recovered the answer
+from `agy`'s own on-disk transcript instead. **agy 1.0.15 fixed that** (the
+plugin is validated on **1.1.0**), so stdout is now the fast path and the
+transcript remains only as a fallback for older `agy`. (`agy --print` also
+*hangs* on a non-TTY stdin that never EOFs, so the plugin always closes
+stdin.)
 
-The read-only commands work around this **without** auto-approval. `agy`
-persists its own conversation transcript to disk on every `--print` run —
-with no tool permission required — so:
+What makes the read-only commands read-only is **not** the capture method — it
+is that **`agy` is launched from a throwaway temp dir (not your repo)** with
+only that dir in `--add-dir`, so even though `agy --print` still executes
+write tools, it has no path to write into your repo. No
+`--dangerously-skip-permissions`; `--sandbox` is layered on where the OS
+enforces it.
 
-- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review`** read the answer
-  back from `agy`'s transcript
-  (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`, located via
-  the run's own `--log-file`) with **no** `--dangerously-skip-permissions`.
-  What makes them read-only is that **agy is launched from a throwaway temp
-  dir (not your repo)** with only that dir in `--add-dir` — so even though
-  `agy --print` still executes write tools, it has no path to write into
-  your repo. `--sandbox` is layered on where the OS enforces it. (If `node`
-  isn't available, `/agy:ask` falls back to the scoped `write_file` path
-  below, also run from the temp dir.)
+- **`/agy:ask`, `/agy:review`, `/agy:adversarial-review`** run `agy` read-only
+  from a temp dir and return its answer (stdout, with the transcript as
+  fallback) — no auto-approval.
 - **`/agy:rescue`** edits files by design, and **`/agy:image`** saves a
-  generated image, so they keep the `write_file` +
-  `--dangerously-skip-permissions` path, scoped to a throwaway temp dir.
-  `rescue`'s repo writes are guarded by the clean-tree check, the post-run
-  diff, and `--isolate` worktree mode.
+  generated image, so they use `--dangerously-skip-permissions`, scoped to a
+  throwaway temp dir. `rescue`'s repo writes are guarded by the clean-tree
+  check, the post-run diff, and `--isolate` worktree mode.
 
 See [SECURITY.md](./SECURITY.md) for the full posture and the honest
 per-platform guarantee levels.
@@ -314,20 +335,21 @@ Subagents in Claude Code can run in the background and report back when
 finished. That is the workflow you want when you "hand this off to another
 model and keep working" — which is the whole point of delegating to `agy`.
 
-## Roadmap (fork)
+## Roadmap
 
-Tracking parity with `openai/codex-plugin-cc`. Phased plan:
+Built in phases; everything through Phase 3 has shipped and is validated
+against real `agy` 1.1.0.
 
 - **Phase 1 — Foundation** ✅
-  - [x] Fork attribution (`NOTICE`, updated `LICENSE`, marketplace renamed
-        to `limeflash-antigravity`).
+  - [x] Attribution + marketplace setup (`NOTICE`, `LICENSE`, marketplace
+        `limeflash-antigravity`).
   - [x] Validate `IMAGE_PATH` stays inside the `agy` artifacts dir
         before `cp` — closes a low-severity exfil vector.
   - [x] Pre-flight secret scan on `git diff` before `/agy:review`.
   - [x] CI: shellcheck + bats unit tests on every PR.
   - [x] Community files: `SECURITY.md`, `CONTRIBUTING.md`, issue/PR
         templates, dependabot.
-- **Phase 2 — codex-plugin-cc parity** ✅ (0.5.x)
+- **Phase 2 — Stateful workflows & safety rails** ✅ (0.5.x)
   - [x] Node.js companion scaffold + state machine
         (`lib/state.mjs`, `lib/job-control.mjs`,
         `lib/tracked-jobs.mjs`, …).
@@ -339,7 +361,7 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
   - [x] `/agy:adversarial-review` (challenge-mode review).
   - [x] `agy` #76 capture: read-only **transcript capture** (no
         auto-approve) for ask/review/adversarial + `write_file` fallback +
-        non-TTY stdin-hang fix — validated against real `agy` 1.0.3.
+        non-TTY stdin-hang fix — validated against real `agy` 1.1.0.
   - [x] `/agy:rescue` safety rails: clean-tree guard, post-run diff,
         `--isolate` worktree mode.
   - [x] Secret-scan guardrails (Bash + companion parity).
@@ -354,21 +376,32 @@ Tracking parity with `openai/codex-plugin-cc`. Phased plan:
 
 See [CHANGELOG.md](./CHANGELOG.md) for shipped changes.
 
-## Inspiration
+## Tested & dogfooded
 
-This fork extends
-[`simplybychris/antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc),
-which is itself inspired by
-[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc).
+- **245 unit tests** (`vitest`) plus Bash `bats` tests and `shellcheck`, run
+  in CI on **Node 18 / 20 / 22** across Ubuntu and macOS on every push.
+- **Validated end-to-end** against a real `agy` 1.1.0 install on **Windows
+  (git-bash)**, **WSL2 Ubuntu**, and **macOS 26.5** — `ask`, `review`,
+  `scrape`, `doc-to-md`, and the read-only guarantee all confirmed on hardware.
+- **The plugin reviews itself.** Running `/agy:review` and
+  `/agy:adversarial-review` on the plugin's own diffs is part of the workflow
+  — that's how the read-only-cwd hole, the secret-scanner coverage gaps, a
+  macOS symlink bug, and five SSRF / path / TOCTOU issues were caught and
+  fixed.
 
-The goal is to keep the security posture as tight as `agy` allows while
-reaching the codex-plugin-cc feature surface. `agy` 1.0.3 returns no output
-from `--print` in a non-TTY context (issue #76); the read-only commands
-work around this by reading `agy`'s own on-disk transcript, so they need
-**no** auto-approval (see [How output is captured](#how-output-is-captured-agy-issue-76)).
-The only commands that auto-approve are the write-capable ones
-(`/agy:rescue`, `/agy:image`), scoped to a temp dir and — for `rescue` —
-guarded by `--isolate` worktree mode.
+## Credits
+
+Originally seeded from [@simplybychris](https://github.com/simplybychris)'s
+[`antigravity-plugin-cc`](https://github.com/simplybychris/antigravity-plugin-cc)
+(MIT) — thank you for the starting point. Job-control and state-persistence
+patterns are inspired by
+[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) (Apache-2.0).
+
+This project has since been substantially rewritten and extended: the
+read-only guarantee, the `agy` #76 transcript-capture, the Node job-control
+companion, `/agy:scrape` + `/agy:doc-to-md` with the SSRF / path guards, the
+native PowerShell entry, the cross-platform validation, and the 245-test
+suite are all original to it. See [NOTICE](./NOTICE) for attribution details.
 
 ## License
 

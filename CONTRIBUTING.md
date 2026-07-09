@@ -29,23 +29,21 @@ priority order):
 4. Run `/agy:setup` to confirm nothing broke.
 5. Open a PR. CI must be green; new behavior should land with a test.
 
-## What this fork wants help with
+## What this project wants help with
 
-- **Phase 2 (in progress)**: ported job-control primitives from
-  `codex-plugin-cc`'s pattern (state.mjs, job-control.mjs,
-  tracked-jobs.mjs) — re-implemented, not copied verbatim. PRs with
-  tests welcome.
-- **`/agy:adversarial-review`** prompt template that genuinely
-  challenges the implementation choice, not just nitpicks code.
-- **Windows-native PowerShell wrapper** (`agy-run.ps1`) parity with
-  `agy-run.sh`, including the lockfile + `settings.json` patch
-  semantics.
-- **Better secret patterns** for `_scan_diff_for_secrets` (more true
-  positives, no new false positives — bring sample diffs in the PR).
-- **`shfmt -d -i 2 -ci` clean format pass** on `agy-run.sh`. Currently
-  informational in CI; making it blocking is the goal.
+- **Better secret patterns** for the secret scanner (more true positives, no
+  new false positives — bring sample diffs in the PR).
+- **`/agy:doc-to-md` for binary formats** (PDF / DOCX / PPTX) via a safe local
+  text-extraction step.
+- **PowerShell parity** — extend `agy-run.ps1` to more commands, and add
+  Pester tests.
+- **`shfmt -d -i 2 -ci` clean format pass** on `agy-run.sh` (currently
+  informational in CI; making it blocking is the goal).
+- **Real-world dogfooding reports** — bugs you hit running the commands on
+  your own projects. Running `/agy:review` / `/agy:adversarial-review` on the
+  plugin's own diffs is how most bugs get found.
 
-## What this fork will say no to
+## What this project will say no to
 
 - A Node.js runtime for the slash commands that don't need state
   (`/agy:ask`, `/agy:image`, `/agy:review`, `/agy:setup`, `/agy:help`).

@@ -5,13 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Fork lineage.** Versions `0.5.0-dev` onward are maintained by
-> [@limeflash](https://github.com/limeflash) in
-> [limeflash/antigravity-plugin-cc](https://github.com/limeflash/antigravity-plugin-cc),
-> forked from
+> **Lineage.** Versions `0.5.0` onward are this project, maintained by
+> [@limeflash](https://github.com/limeflash). It was originally seeded from
 > [simplybychris/antigravity-plugin-cc](https://github.com/simplybychris/antigravity-plugin-cc)
-> at upstream commit `50d32ea` (tag `0.4.1`). Earlier entries below are
-> the upstream history, preserved for traceability.
+> at commit `50d32ea` (tag `0.4.1`) — thanks for the starting point — and has
+> since been substantially rewritten and extended. The earlier entries below
+> are the original upstream history, preserved for traceability.
+
+## [0.8.0] - 2026-07-09 (limeflash)
+
+**agy 1.1.0 support + a standalone-project refresh.**
+
+### Changed
+- **Direct stdout capture (the #76 workaround is now a fallback).** `agy` 1.0.15
+  fixed issue [#76](https://github.com/google-antigravity/antigravity-cli/issues/76)
+  (non-TTY `--print` output was silently discarded on Windows). The plugin now
+  reads the answer from `agy`'s **stdout** as the fast path — no Node needed on
+  the happy path for `/agy:ask` — and keeps the on-disk transcript read only as
+  a fallback for older `agy`. Applied to all three capture sites: the Bash
+  wrapper (`_agy_capture`), the Node companion (`runReviewViaTranscript`), and
+  the PowerShell entry (`Invoke-AgyCapture`). Validated live on **agy 1.1.0**
+  (Windows). The read-only guarantee is unchanged — agy still runs from a
+  throwaway temp dir, so it has no path into your repo.
+- **Repositioned as a standalone project.** README rebuilt (hero, badges,
+  "Why this plugin", "Tested & dogfooded", gracious "Credits"); `NOTICE`,
+  `CHANGELOG` lineage note, and the package/marketplace/plugin descriptions
+  reworded — the "fork of …" framing is replaced by an attribution/thank-you
+  to the upstream starting point. All landing/install URLs repointed to
+  `limeflash`.
+
+### Notes
+- `agy` 1.1.0 adds execution modes (`--mode accept-edits|plan`) and an
+  `agy models` subcommand. `--mode plan` was evaluated for read-only
+  enforcement but does **not** make a headless `--print` run read-only (it
+  still executes write tools), so the temp-dir model remains what enforces
+  read-only. `/agy:rescue` keeps `--dangerously-skip-permissions` (it's a
+  delegated coding task — guarded by the clean-tree check, post-run diff, and
+  `--isolate` worktree mode).
+- 245 unit tests + bats/shellcheck; CI green on Node 18/20/22, Ubuntu + macOS.
 
 ## [0.7.2] - 2026-05-31 (limeflash fork)
 

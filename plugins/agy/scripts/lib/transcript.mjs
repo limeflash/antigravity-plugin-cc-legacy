@@ -1,18 +1,19 @@
-// transcript.mjs — capture an `agy --print` answer by reading agy's own
-// on-disk conversation transcript, instead of the write_file +
-// --dangerously-skip-permissions workaround.
+// transcript.mjs — FALLBACK capture of an `agy --print` answer by reading
+// agy's own on-disk conversation transcript, for older `agy` where non-TTY
+// stdout is unusable.
 //
 // Why this exists
 // ---------------
-// `agy --print` flushes ZERO bytes to a non-TTY stdout (issue #76): the
-// response is generated but the "drip" typewriter only targets a real
-// terminal. The plugin always runs agy from a subprocess, so capturing
-// stdout returns nothing.
+// Older `agy` (< 1.0.15) flushed ZERO bytes to a non-TTY stdout (issue #76):
+// the response was generated but the "drip" typewriter only targeted a real
+// terminal, so a subprocess capturing stdout got nothing. agy 1.0.15 FIXED
+// that, so the plugin now reads stdout directly as the primary path (see the
+// capture sites in agy-run.sh / tracked-jobs.mjs / agy-run.ps1) and only
+// falls back to this transcript reader when stdout comes back empty.
 //
-// BUT agy ALWAYS persists the conversation transcript to disk — on every
-// --print run, regardless of TTY, with NO tool permission and NO
-// auto-approve. So we run agy strictly read-only and then read the
-// model's answer back from:
+// agy ALWAYS persists the conversation transcript to disk — on every --print
+// run, regardless of TTY, with NO tool permission and NO auto-approve. So the
+// fallback runs agy strictly read-only and reads the model's answer back from:
 //
 //   <store>/brain/<conversationId>/.system_generated/logs/transcript.jsonl
 //
@@ -20,10 +21,9 @@
 // "Created conversation <uuid>", so we recover it race-free (no guessing,
 // no newest-by-mtime race against other concurrent agy runs).
 //
-// This removes BOTH crutches for the read-only commands (ask / review /
-// adversarial-review): no write_file injection, and no
-// --dangerously-skip-permissions. Validated live on agy 1.0.3 (see
-// SECURITY.md "Read-only capture").
+// Either way the read-only commands (ask / review / adversarial-review) need
+// neither a write_file injection nor --dangerously-skip-permissions. Validated
+// live on agy 1.1.0 (see SECURITY.md "Read-only capture").
 
 import { promises as fsp, realpathSync } from "node:fs";
 import os from "node:os";

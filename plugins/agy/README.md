@@ -6,17 +6,26 @@ full usage, see the [repo-level README](../../README.md).
 ## Layout
 
 - `commands/` — slash commands: `/agy:setup`, `/agy:ask`, `/agy:delegate`,
-  `/agy:research`, `/agy:review`, `/agy:image`, `/agy:help`.
+  `/agy:research`, `/agy:review`, `/agy:adversarial-review`, `/agy:rescue`,
+  `/agy:scrape`, `/agy:doc-to-md`, `/agy:image`, `/agy:status`, `/agy:result`,
+  `/agy:cancel`, `/agy:help`.
 - `agents/runner.md` — the `agy:runner` subagent (thin forwarder around the
   Antigravity CLI).
 - `skills/antigravity-cli/` — internal runtime skill, used only inside the
   `agy:runner` subagent.
-- `scripts/agy-run.sh` — bash wrapper that locates `agy`, checks auth, and
-  invokes `agy -p`.
+- `scripts/agy-run.sh` — Bash wrapper for the synchronous commands.
+- `scripts/agy-run.ps1` — native Windows PowerShell entry (`ask` / `scrape` /
+  `doc-to-md`) for hosts without bash.
+- `scripts/agy-companion.mjs` + `scripts/lib/` — Node.js companion for the
+  stateful commands (background jobs, branch/adversarial review) and the
+  shared helpers (transcript capture, secret scan, input deny-lists).
 
-## Why this layout
+## Design
 
-Mirrors the conventions used by
-[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), trimmed
-down: no Node runtime, no broker, no review-gate hook. Plain Bash plus a
-single subagent.
+Bash and PowerShell handle the synchronous commands with **no dependencies**;
+the Node companion (optional, Node ≥ 18.18) adds background job control and
+stateful review. The read-only commands run `agy` from a throwaway temp dir so
+it can never touch your repo, and every input is guarded — a credential scan
+before anything reaches Gemini, an SSRF URL deny-list, and a sensitive-path
+deny-list. See the [repo README](../../README.md) and
+[SECURITY.md](../../SECURITY.md) for the full posture.

@@ -120,9 +120,10 @@ function Invoke-AgyCapture {
       $savedEnv[$v] = [Environment]::GetEnvironmentVariable($v)
       if ($null -ne $savedEnv[$v]) { Remove-Item -Path "Env:\$v" -ErrorAction SilentlyContinue }
     }
+    $stdoutFile = Join-Path $tmp 'agy-stdout.txt'
     Push-Location $tmp
     try {
-      $null | & $Agy --sandbox --add-dir $tmp --log-file $log --print-timeout $Timeout --print $Prompt *> $null
+      $null | & $Agy --sandbox --add-dir $tmp --log-file $log --print-timeout $Timeout --print $Prompt 1> $stdoutFile 2> $null
     } finally {
       Pop-Location
       foreach ($v in $stripVars) {
@@ -130,12 +131,19 @@ function Invoke-AgyCapture {
       }
     }
 
-    $res = Get-NodeResult -Script (Join-Path $script:LibDir 'transcript.mjs') -NodeArgs @($log, $tmp)
-    if ($res.Code -eq 0 -and $res.Out) {
-      $res.Out
+    # Prefer agy's direct stdout (agy >= 1.0.15 fixed the #76 bug that swallowed
+    # it); fall back to reading agy's own transcript for older agy.
+    $answer = Get-Content -Raw -LiteralPath $stdoutFile -ErrorAction SilentlyContinue
+    if ($answer) { $answer = $answer.Trim() }
+    if (-not $answer) {
+      $res = Get-NodeResult -Script (Join-Path $script:LibDir 'transcript.mjs') -NodeArgs @($log, $tmp)
+      if ($res.Code -eq 0 -and $res.Out) { $answer = $res.Out }
+    }
+    if ($answer) {
+      $answer
       return
     }
-    [Console]::Error.WriteLine('error: agy returned no output. Could not recover an answer from agy''s transcript (issue #76 capture).')
+    [Console]::Error.WriteLine('error: agy returned no output — neither stdout nor the transcript produced an answer.')
     [Console]::Error.WriteLine('       The prompt may have timed out, or agy was interrupted.')
     exit 1
   } finally {

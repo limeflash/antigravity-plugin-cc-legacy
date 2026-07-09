@@ -1,31 +1,30 @@
-antigravity-plugin-cc (limeflash fork)
-======================================
+agy — Antigravity CLI plugin for Claude Code
+============================================
 
-This project is a fork of:
+Acknowledgements
+----------------
+
+This project was originally seeded from:
 
   simplybychris/antigravity-plugin-cc
   https://github.com/simplybychris/antigravity-plugin-cc
   Licensed under the MIT License.
 
-The fork extends the upstream plugin with the goal of reaching feature
-parity with openai/codex-plugin-cc — adding background job control
-(/agy:status, /agy:result, /agy:cancel), branch-base code review,
-adversarial review, and an optional stop-gate review hook — while
-preserving the upstream's security-conscious defaults (no auto-approve,
-no global write-dir expansion).
+Thank you to @simplybychris for the starting point. The project has since
+been substantially rewritten and extended — a real read-only guarantee, the
+agy issue-#76 transcript capture, a Node.js job-control companion,
+/agy:scrape and /agy:doc-to-md with SSRF/path guards, a native PowerShell
+entry, cross-platform validation, and a 245-test suite are all original to
+it (see CHANGELOG.md). It is maintained independently by @limeflash. The
+MIT attribution above is retained because portions of the initial scaffold
+trace back to that base.
 
-Roadmap inspiration is drawn from:
+Job-control, state-persistence, and render-layer concepts are inspired by:
 
   openai/codex-plugin-cc
   https://github.com/openai/codex-plugin-cc
   Licensed under the Apache License, Version 2.0.
 
-Architecture concepts re-implemented from codex-plugin-cc (job control,
-state persistence, render layer) are attributed in the source comments
-where applicable. No source code is copied directly from codex-plugin-cc
-in this initial fork commit; future PRs that port specific files will
-include the upstream attribution header and Apache 2.0 NOTICE as
-required.
-
-All modifications relative to the simplybychris baseline are documented
-in CHANGELOG.md from version 0.5.0 onwards.
+No source code is copied directly from codex-plugin-cc; the patterns are
+re-implemented for `agy`. Any future file-level port would carry the
+upstream attribution header and the Apache-2.0 NOTICE as required.

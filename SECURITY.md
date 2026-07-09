@@ -2,16 +2,15 @@
 
 ## Read-only capture, and the `--dangerously-skip-permissions` tradeoff
 
-`agy` 1.0.3 returns nothing from `--print` in a non-TTY context (issue
-#76). The plugin handles this two different ways, depending on whether the
-command needs to write.
+The plugin reads the answer from `agy`'s stdout. (Older `agy` < 1.0.15 had a
+bug, #76, that swallowed non-TTY stdout; the plugin then recovered the answer
+from `agy`'s on-disk transcript. agy 1.0.15 fixed it — the plugin is validated
+on 1.1.0 — so stdout is the primary path and the transcript remains a
+fallback.)
 
 **Read-only commands (`/agy:ask`, `/agy:review`, `/agy:adversarial-review`)
-— agy runs OUTSIDE your repo.** `agy` persists its own conversation
-transcript to disk on every `--print` run (no tool permission needed), so
-the plugin reads the answer back from that transcript
-(`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`, located via the
-run's own `--log-file`) instead of a write_file workaround — no
+— agy runs OUTSIDE your repo.** These run `agy` read-only from a throwaway
+temp dir and capture its answer — no write_file workaround, no
 `--dangerously-skip-permissions`.
 
 **Important / the thing that actually enforces read-only:** `agy --print`
@@ -62,7 +61,7 @@ history); `icacls`/`attrib`/Job-Objects were rejected as non-enforcing,
 AppContainer/Low-Integrity as impractical for a CLI, and WSL identified as
 the only robust no-admin path on Windows. The read-only transcript-capture
 path that removed auto-approve from `ask`/`review` was validated live on
-agy 1.0.3.
+agy 1.1.0.
 
 ## Reporting a vulnerability
 

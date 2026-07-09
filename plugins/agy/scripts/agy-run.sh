@@ -383,27 +383,30 @@ with_model_override() {
 }
 
 # ---------------------------------------------------------------------------
-# agy issue #76 output capture.
+# agy output capture (read-only).
 #
-# `agy --print`, when stdout is NOT a TTY (any time the plugin runs it from
-# a subprocess / agent Bash tool), generates the response internally but
-# flushes ZERO bytes to stdout — the "drip" typewriter only targets a real
-# terminal. Confirmed on agy 1.0.3: `Drip stopped: length=N` in the log
-# while stdout stays empty. Separately, `agy --print` blocks forever on a
-# non-TTY stdin that never reaches EOF, so we always close stdin
-# (</dev/null).
+# agy 1.0.15 fixed issue #76: earlier `agy --print`, when stdout was NOT a
+# TTY (any time the plugin runs it from a subprocess / agent Bash tool),
+# generated the response internally but flushed ZERO bytes to stdout — the
+# "drip" typewriter only targeted a real terminal (`Drip stopped: length=N`
+# in the log while stdout stayed empty, confirmed on agy 1.0.3). Separately,
+# `agy --print` blocks forever on a non-TTY stdin that never reaches EOF, so
+# we always close stdin (</dev/null).
 #
-# PRIMARY path (_agy_capture): agy persists its OWN conversation transcript
-# to disk on every --print run — with NO tool permission and NO
-# auto-approve. So we run agy strictly READ-ONLY (--sandbox, --add-dir only
-# a throwaway temp dir, --log-file so we can recover the conversation id)
-# and read the model's answer back from that transcript via
-# lib/transcript.mjs. No write_file, no --dangerously-skip-permissions.
+# PRIMARY path (_agy_capture): run agy strictly READ-ONLY (--sandbox,
+# --add-dir only a throwaway temp dir, --log-file) and read the answer from
+# agy's STDOUT — the fast path on agy >= 1.0.15. No write_file, no
+# --dangerously-skip-permissions.
 #
-# FALLBACK path (_agy_capture_writefile): only when `node` is unavailable
-# (the transcript is JSONL, parsed with node). Reverts to instructing agy
-# to write_file its answer under --dangerously-skip-permissions, scoped to
-# a throwaway temp dir. Kept so /agy:ask still works without node.
+# FALLBACK 1 (transcript): if stdout comes back empty (older agy still hit by
+# #76), read the answer from agy's own on-disk conversation transcript — which
+# it persists on every --print run with NO tool permission — via
+# lib/transcript.mjs (the conversation id comes from the run's --log-file).
+#
+# FALLBACK 2 (_agy_capture_writefile): only when `node` is unavailable (the
+# transcript is JSONL, parsed with node). Reverts to instructing agy to
+# write_file its answer under --dangerously-skip-permissions, scoped to a
+# throwaway temp dir. Kept so /agy:ask still works without node.
 #
 # Usage: _agy_capture <agy> <canonical-model-or-empty> <timeout> <prompt> [extra agy args...]
 # Prints the response on success (rc 0); prints an error and rc 1 otherwise.
@@ -486,35 +489,38 @@ _agy_capture() {
   # --dangerously-skip-permissions / NO write_file. Running outside the repo
   # is what actually enforces read-only (see the cwd note above).
   # `env -u …` strips the repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from
-  # agy's environment as defense in depth, so it can't trivially target the
-  # host repo by absolute path. </dev/null dodges the non-TTY stdin hang;
-  # stdout is empty under #76 (we read the transcript instead).
+  # agy's environment as defense in depth. </dev/null dodges the non-TTY stdin
+  # hang. We capture stdout to a file: agy >= 1.0.15 fixed the #76 bug that
+  # swallowed non-TTY stdout, so stdout is now the fast path; the transcript
+  # is the fallback for older agy where stdout still comes back empty.
+  local stdout_file="$outdir/agy-stdout.txt"
   local -a agy_env=(env -u CLAUDE_PROJECT_DIR -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR)
   if [ "$use_override" -eq 1 ]; then
     ( cd "$outdir" && with_model_override "$canonical" -- "${agy_env[@]}" "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >/dev/null 2>&1 ) || true
+      </dev/null >"$stdout_file" 2>/dev/null ) || true
   else
     ( cd "$outdir" && "${agy_env[@]}" "$agy" --sandbox \
       --add-dir "$target_dir" --log-file "$logfile_arg" --print-timeout "$timeout" "$@" --print "$prompt" \
-      </dev/null >/dev/null 2>&1 ) || true
+      </dev/null >"$stdout_file" 2>/dev/null ) || true
   fi
 
-  # Recover the model's answer from agy's own transcript. Pass the
-  # Windows-safe log path (logfile_arg) so a native Node on Windows can read
-  # it even if MSYS argv conversion is disabled, and the repo cwd as the
-  # fallback hint. transcript.mjs prints the answer + exits 0, or exits
-  # non-zero (empty) if nothing was recovered. We capture its stderr and
-  # surface it only on failure, so diagnostics aren't lost but the happy
-  # path stays clean.
+  # Prefer agy's direct stdout (the #76 fix). Fall back to reading agy's own
+  # transcript for older agy / platforms where non-TTY stdout is still empty.
+  # transcript.mjs prints the answer (exit 0) or exits non-zero; its stderr is
+  # captured and surfaced only if BOTH paths come back empty.
   local rc=0 answer="" node_err="$outdir/node.err"
-  if answer="$(node "$AGY_LIB_DIR/transcript.mjs" "$logfile_arg" "$cwd_arg" 2>"$node_err")" && [ -n "$answer" ]; then
+  answer="$(cat "$stdout_file" 2>/dev/null)"
+  if [ -z "$answer" ] && command -v node >/dev/null 2>&1; then
+    answer="$(node "$AGY_LIB_DIR/transcript.mjs" "$logfile_arg" "$cwd_arg" 2>"$node_err" || true)"
+  fi
+  if [ -n "$answer" ]; then
     printf '%s\n' "$answer"
   else
     rc=1
     {
       echo "error: agy returned no output."
-      echo "       Could not recover an answer from agy's transcript (issue #76 capture)."
+      echo "       Neither agy's stdout nor its transcript produced an answer."
       echo "       Possible causes:"
       echo "       - the prompt timed out (raise the timeout), or"
       echo "       - agy was interrupted before it answered."

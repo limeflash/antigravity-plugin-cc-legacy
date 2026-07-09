@@ -385,14 +385,17 @@ async function runReviewViaTranscript(record, { emit }) {
   args.push(...(record.args ?? []));
   args.push("--print", prompt);
 
+  let stdoutBuf = "";
   const code = await new Promise((resolve) => {
     const child = spawn(agyBin, args, {
-      // stdin ignored to dodge the non-TTY hang; stdout ignored because
-      // #76 leaves it empty (we read the transcript instead); stderr piped
-      // so real agy errors still surface in the log.
-      stdio: ["ignore", "ignore", "pipe"],
+      // stdin ignored to dodge the non-TTY hang. stdout is captured: agy
+      // >= 1.0.15 fixed the #76 bug that swallowed non-TTY stdout, so it's
+      // now the fast path (the transcript is the fallback). stderr piped so
+      // real agy errors still surface in the log.
+      stdio: ["ignore", "pipe", "pipe"],
       cwd: stageDir,
     });
+    child.stdout.on("data", (chunk) => { stdoutBuf += chunk.toString(); });
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
       emit(`[agy-job ${record.id}] spawn error: ${err.message}\n`);
@@ -403,16 +406,19 @@ async function runReviewViaTranscript(record, { emit }) {
 
   let produced = false;
   try {
-    const { answer, conversationId } = await captureAnswer({
-      logFile,
-      cwd: stageDir,
-    });
+    // Prefer agy's direct stdout (the #76 fix); fall back to reading agy's
+    // own transcript for older agy where non-TTY stdout is still empty.
+    let answer = stdoutBuf.trim();
+    let conversationId = null;
+    if (!answer) {
+      ({ answer, conversationId } = await captureAnswer({ logFile, cwd: stageDir }));
+    }
     if (answer && answer.trim()) {
       emit(answer.endsWith("\n") ? answer : answer + "\n");
       produced = true;
     } else {
       emit(
-        `[agy-job ${record.id}] no answer captured from agy's transcript ` +
+        `[agy-job ${record.id}] no answer captured from agy's stdout or transcript ` +
           `(conversationId=${conversationId ?? "?"}). agy may have timed out ` +
           `or been interrupted; see the run log at ${logFile}.\n`,
       );
