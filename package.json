@@ -1,6 +1,6 @@
 {
   "name": "@limeflash/antigravity-plugin-cc",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "The Antigravity CLI (agy) plugin for Claude Code. Read-only commands with a real read-only guarantee plus secret/SSRF/path guards; a Node.js companion for background job control (/agy:rescue, /agy:status, /agy:result, /agy:cancel); Bash + PowerShell wrappers for the synchronous /agy:* commands.",
   "license": "MIT",

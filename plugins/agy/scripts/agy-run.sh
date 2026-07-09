@@ -587,12 +587,17 @@ _agy_capture_writefile() {
     fi
   fi
 
+  # Strip repo-location hints (CLAUDE_PROJECT_DIR / GIT_*) from agy's env as
+  # defense in depth — same as _agy_capture. This fallback runs agy under
+  # --dangerously-skip-permissions, so denying it a pointer to the host repo
+  # matters even though the repo is still never its cwd nor in --add-dir.
+  local -a agy_env=(env -u CLAUDE_PROJECT_DIR -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR)
   if [ "$use_override" -eq 1 ]; then
-    ( cd "$outdir" && with_model_override "$canonical" -- "$agy" --dangerously-skip-permissions --sandbox \
+    ( cd "$outdir" && with_model_override "$canonical" -- "${agy_env[@]}" "$agy" --dangerously-skip-permissions --sandbox \
       --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
       </dev/null >/dev/null 2>&1 ) || true
   else
-    ( cd "$outdir" && "$agy" --dangerously-skip-permissions --sandbox \
+    ( cd "$outdir" && "${agy_env[@]}" "$agy" --dangerously-skip-permissions --sandbox \
       --add-dir "$target_dir" --print-timeout "$timeout" "$@" --print "$augmented" \
       </dev/null >/dev/null 2>&1 ) || true
   fi

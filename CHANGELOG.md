@@ -12,6 +12,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > since been substantially rewritten and extended. The earlier entries below
 > are the original upstream history, preserved for traceability.
 
+## [0.8.1] - 2026-07-10 (limeflash)
+
+**Bug-hunt patch** — the 0.8.0 changes were run back through `agy` itself
+(read-only adversarial review) plus a hand audit. (A parallel `codex` pass
+wedged on an unresponsive backend and was skipped this round.) Four real
+issues fixed; one agy finding was a verified false positive.
+
+### Security
+- **SSRF: a private IPv4 embedded *after* a leading label is now blocked.**
+  The scrape guard anchored its embedded-IPv4 check at the *first* label, so
+  `foo.127.0.0.1.nip.io` / `a.b.10.0.0.1.sslip.io` slipped past — nip.io /
+  sslip.io resolve `<anything>.<ip>.nip.io` straight to `<ip>`. It now matches
+  a loopback/private quad anywhere in the hostname. Public embedded IPs
+  (`foo.8.8.8.8.nip.io`) still pass. Regression tests added.
+
+### Changed (defense in depth)
+- **Strip repo-location env from the remaining agy launch paths.** The bash
+  primary path already dropped `CLAUDE_PROJECT_DIR` / `GIT_*`; the bash
+  no-node `write_file` fallback and the Node read-only spawns
+  (`runReviewViaTranscript`, and the read-only branch of `defaultAgyRunner`)
+  now do too. `rescue` intentionally keeps them — it edits the repo by design.
+- **Fix multibyte corruption in the Node stdout capture.** The review capture
+  concatenated `chunk.toString()` per data event, which mangles a UTF-8
+  character split across a chunk boundary (→ `�`) for non-ASCII answers larger
+  than one read. Now uses `setEncoding("utf8")` so the stream's StringDecoder
+  handles boundaries. (Bash / PowerShell capture to a file and were already
+  byte-safe.)
+
+### Notes
+- One agy finding — shorthand IPv4 `http://127.1/` as an SSRF bypass — was a
+  **false positive**: `new URL()` normalizes it to `127.0.0.1` before the
+  guard sees it, and the guard then blocks it. Verified; no change needed.
+- Deferred (pre-existing, not 0.8.0 regressions, and the transcript path is now
+  only a fallback behind direct stdout): transcript answer-selection race and
+  multi-`PLANNER_RESPONSE` concatenation on `-c` continued runs; orphaned agy
+  child process on `/agy:cancel`; git-worktree / temp-dir leak on Ctrl+C.
+  Tracked for a follow-up.
+- 246 unit tests; CI green.
+
 ## [0.8.0] - 2026-07-09 (limeflash)
 
 **agy 1.1.0 support + a standalone-project refresh.**

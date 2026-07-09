@@ -242,6 +242,17 @@ export function capPromptForArgv(body, suffix, max = MAX_PROMPT_BYTES) {
   return trimmed + marker + suffix;
 }
 
+// Repo-location env hints stripped from agy's environment for READ-ONLY runs
+// (defense in depth: the repo is never in --add-dir, but don't hand agy a
+// pointer to it either). rescue KEEPS them — it legitimately operates on the
+// repo. Mirrors agy-run.sh's `env -u …`.
+const REPO_ENV_HINTS = ["CLAUDE_PROJECT_DIR", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"];
+function readOnlyEnv() {
+  const e = { ...process.env };
+  for (const k of REPO_ENV_HINTS) delete e[k];
+  return e;
+}
+
 async function defaultAgyRunner(record, { sink } = {}) {
   const emit = sink ?? ((t) => process.stdout.write(t));
   const { meta } = record;
@@ -307,11 +318,14 @@ async function defaultAgyRunner(record, { sink } = {}) {
 
   const code = await new Promise((resolve) => {
     const child = spawn(agyBin, args, {
-      // stdin ignored (=/dev/null) to dodge the non-TTY hang; stdout
-      // ignored because #76 leaves it empty; stderr piped so real agy
-      // errors still surface in the log.
+      // stdin ignored (=/dev/null) to dodge the non-TTY hang; stdout ignored
+      // because this path takes agy's answer from the write_file response, not
+      // stdout; stderr piped so real agy errors still surface in the log.
       stdio: ["ignore", "ignore", "pipe"],
       cwd,
+      // Read-only kinds (ask) run with repo-location hints stripped; rescue
+      // legitimately edits the repo, so it keeps the full environment.
+      env: writeCapable ? process.env : readOnlyEnv(),
     });
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
@@ -394,8 +408,15 @@ async function runReviewViaTranscript(record, { emit }) {
       // real agy errors still surface in the log.
       stdio: ["ignore", "pipe", "pipe"],
       cwd: stageDir,
+      // Read-only review: strip repo-location hints (defense in depth).
+      env: readOnlyEnv(),
     });
-    child.stdout.on("data", (chunk) => { stdoutBuf += chunk.toString(); });
+    // setEncoding drives the stream's StringDecoder, which buffers a partial
+    // multibyte UTF-8 sequence split across chunk boundaries. `chunk.toString()`
+    // per-chunk would corrupt such a char (→ U+FFFD) for non-ASCII answers that
+    // span more than one read.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdoutBuf += chunk; });
     child.stderr.on("data", (chunk) => emit(chunk.toString()));
     child.on("error", (err) => {
       emit(`[agy-job ${record.id}] spawn error: ${err.message}\n`);

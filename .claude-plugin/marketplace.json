@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "The Antigravity CLI (`agy`) plugin for Claude Code — ask, code review, delegate, web scrape, and doc→Markdown from inside your editor. Read-only guarantee (agy never touches your repo) + secret / SSRF / path guards, background job control, cross-platform (Windows / macOS / Linux / WSL), 245 tests.",
-    "version": "0.8.0"
+    "version": "0.8.1"
   },
   "plugins": [
     {
       "name": "agy",
       "description": "Use the Google Antigravity CLI (`agy`) from Claude Code. Synchronous Bash wrapper: /agy:setup, /agy:ask, /agy:delegate, /agy:research, /agy:review, /agy:image, /agy:scrape, /agy:doc-to-md, /agy:help. Node.js companion for stateful workflows: /agy:rescue (background-capable), /agy:status, /agy:result, /agy:cancel. Read-only commands run agy outside your repo; secret-scan + SSRF/path deny-lists guard what's sent to Gemini. Per-call model selection via --model.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "author": {
         "name": "limeflash",
         "url": "https://github.com/limeflash"

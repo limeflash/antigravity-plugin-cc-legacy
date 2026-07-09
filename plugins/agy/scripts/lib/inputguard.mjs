@@ -71,11 +71,15 @@ export function isBlockedHost(hostname) {
   // Dotted form with an octal (leading-zero) octet — ambiguous, block.
   if (/\./.test(host) && host.split(".").some((p) => /^0\d/.test(p))) return true;
 
-  // Hostname that EMBEDS a dotted IPv4 as its leading labels
-  // (127.0.0.1.nip.io, 10.0.0.1.sslip.io) — block if those labels form a
-  // blocked IP. Best-effort against the common public-DNS-to-private trick.
-  const lead = host.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\./);
-  if (lead && isBlockedHost(lead[1])) return true;
+  // Hostname that EMBEDS a dotted IPv4 ANYWHERE in its labels
+  // (127.0.0.1.nip.io, foo.127.0.0.1.nip.io, a.b.10.0.0.1.sslip.io) — block
+  // if that quad is itself a blocked IP. Best-effort against the common
+  // public-DNS-to-private (nip.io / sslip.io) rebinding trick; a leading
+  // garbage label must not defeat it. The trailing `\.` requires the quad to
+  // be followed by more labels, so a bare dotted IPv4 (handled below) does
+  // not re-enter this branch and recurse forever.
+  const embed = host.match(/(?:^|\.)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\./);
+  if (embed && isBlockedHost(embed[1])) return true;
 
   // Dotted IPv4.
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);

@@ -56,6 +56,18 @@ describe("isBlockedHost (SSRF guard)", () => {
     expect(isBlockedHost("10.0.0.1.sslip.io")).toBe(true);
     expect(isBlockedHost("8.8.8.8.nip.io")).toBe(false); // public embedded → allowed
   });
+  it("blocks a private IPv4 embedded AFTER a leading garbage label (a prefix must not defeat the guard)", () => {
+    // Regression: the guard used to anchor the embedded-IPv4 match at the very
+    // first label, so a junk prefix slipped a loopback/private host past it —
+    // nip.io / sslip.io resolve `<anything>.<ip>.nip.io` straight to <ip>.
+    expect(isBlockedHost("foo.127.0.0.1.nip.io")).toBe(true);
+    expect(isBlockedHost("a.b.10.0.0.1.sslip.io")).toBe(true);
+    expect(isBlockedHost("x.169.254.169.254.nip.io")).toBe(true); // cloud metadata
+    expect(isBlockedHost("foo.8.8.8.8.nip.io")).toBe(false); // public embedded → still allowed
+    // end-to-end through the URL validator (WHATWG URL keeps these un-normalized)
+    expect(validateScrapeUrl("http://foo.127.0.0.1.nip.io/x").ok).toBe(false);
+    expect(validateScrapeUrl("http://a.b.10.0.0.1.sslip.io/").ok).toBe(false);
+  });
   it("blocks integer / hex / octal encoded IPs", () => {
     expect(isBlockedHost("2130706433")).toBe(true); // 127.0.0.1
     expect(isBlockedHost("0x7f000001")).toBe(true);

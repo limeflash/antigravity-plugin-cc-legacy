@@ -18,7 +18,7 @@ your repository* — and everything that leaves your machine is guarded
 sensitive-path deny-list on files). Cross-platform, **245 unit tests**, CI
 green.
 
-> **Latest — v0.8.0.** Now on **agy 1.1.0** with **direct stdout capture** (the
+> **Latest — v0.8.1.** Now on **agy 1.1.0** with **direct stdout capture** (the
 > #76 workaround is now just a fallback). 13 slash commands · read-only
 > guarantee · secret / SSRF / path guards · background job control · native
 > Windows PowerShell entry.
