@@ -1,3 +1,23 @@
+# ⚠️ This repository has moved
+
+**`agy` for Claude Code is now developed as a standalone project here:**
+
+### 👉 https://github.com/limeflash/antigravity-plugin-cc
+
+This repo is the **archived original** and is no longer maintained. Please update your bookmarks and install from the new repo:
+
+```
+/plugin marketplace add limeflash/antigravity-plugin-cc
+```
+
+All history, tags, and releases were carried over. Thanks for stopping by!
+
+---
+
+<sub>The original README below is kept for reference only.</sub>
+
+---
+
 # agy — the Antigravity CLI plugin for Claude Code
 
 [![CI](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml/badge.svg)](https://github.com/limeflash/antigravity-plugin-cc/actions/workflows/ci.yml)
